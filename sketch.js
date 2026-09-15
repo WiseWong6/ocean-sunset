@@ -3,35 +3,100 @@
 // 这是基于反射规律的视觉近似，不是完整的光线追踪或流体模拟。
 let backdrop;
 let horizonY, sunX, sunY, sunR;
+let pickupTime = 29;
+let waterContacts = [];
 let waterRows = [];
+let skyStars = [];
 let motionPreference;
+const SCENE_DURATION = 78;
+const playback = {time: 0, stamp: 0, playing: false, running: false};
+let playButton, progressInput, timeOutput;
+let draggingProgress = false, resumeAfterDrag = false;
 
 function setup() {
   pixelDensity(Math.min(window.devicePixelRatio || 1, 2));
   const surface = createCanvas(windowWidth, windowHeight);
   surface.elt.setAttribute('role', 'img');
-  surface.elt.setAttribute('aria-label', '夕阳海面上，飞机放下秋千，太阳长出手脚握住绳子，坐着秋千向右飞去');
+  surface.elt.setAttribute('aria-label', '夕阳海面上，飞机放下秋千，太阳长出手脚握住绳子，坐着秋千向右飞去，夜色渐深，星星逐渐显现');
   frameRate(30);
   motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
-  motionPreference.addEventListener('change', updatePlayback);
+  motionPreference.addEventListener('change', () => {
+    playback.playing = !motionPreference.matches;
+    updatePlayback();
+  });
+  setupPlaybackControls();
+  playback.playing = !motionPreference.matches;
   document.addEventListener('visibilitychange', updatePlayback);
   buildScene();
   updatePlayback();
 }
 
+function sceneTime() {
+  if (!playback.running) return playback.time;
+  return (playback.time + Math.max(0, millis() - playback.stamp) / 1000) % SCENE_DURATION;
+}
+
 function updatePlayback() {
-  if (document.hidden || motionPreference.matches) {
+  playback.time = sceneTime();
+  playback.stamp = millis();
+  playback.running = playback.playing && !document.hidden;
+  if (playback.running) loop();
+  else {
     noLoop();
     if (!document.hidden) redraw();
-  } else {
-    loop();
   }
+  updatePlaybackControls();
+}
+
+function setupPlaybackControls() {
+  playButton = document.getElementById('play-toggle');
+  progressInput = document.getElementById('play-progress');
+  timeOutput = document.getElementById('play-time');
+  playButton.disabled = false; progressInput.disabled = false;
+  progressInput.max = SCENE_DURATION;
+  playButton.addEventListener('click', () => {
+    playback.playing = !playback.playing;
+    updatePlayback();
+  });
+  progressInput.addEventListener('pointerdown', () => {
+    draggingProgress = true;
+    resumeAfterDrag = playback.playing;
+    playback.playing = false;
+    updatePlayback();
+  });
+  progressInput.addEventListener('input', () => {
+    playback.time = Math.max(0, Math.min(SCENE_DURATION, Number(progressInput.value)));
+    playback.stamp = millis();
+    updatePlaybackControls();
+    if (!playback.running) redraw();
+  });
+  const finishDrag = () => {
+    if (!draggingProgress) return;
+    draggingProgress = false;
+    playback.playing = resumeAfterDrag;
+    updatePlayback();
+  };
+  window.addEventListener('pointerup', finishDrag);
+  window.addEventListener('pointercancel', finishDrag);
+  window.addEventListener('blur', finishDrag);
+}
+
+function updatePlaybackControls() {
+  if (!playButton) return;
+  const t = sceneTime();
+  const clockText = value => `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(Math.floor(value % 60)).padStart(2, '0')}`;
+  playButton.textContent = playback.playing ? '暂停' : '播放';
+  playButton.setAttribute('aria-label', playback.playing ? '暂停动画' : '播放动画');
+  if (!draggingProgress) progressInput.value = t;
+  progressInput.style.setProperty('--progress', `${t / SCENE_DURATION * 100}%`);
+  progressInput.setAttribute('aria-valuetext', `${clockText(t)}，共 ${clockText(SCENE_DURATION)}`);
+  timeOutput.textContent = `${clockText(t)} / ${clockText(SCENE_DURATION)}`;
 }
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   buildScene();
-  if (motionPreference.matches) redraw();
+  if (!playback.running) redraw();
 }
 
 function seededRandom(seed) {
@@ -58,6 +123,8 @@ function buildScene() {
   sunX = width * 0.5;
   sunR = Math.min(width * 0.038, height * 0.045);
   sunY = horizonY - sunR * 0.76;
+  pickupTime = findPickupTime();
+  waterContacts = findWaterContacts();
   const ctx = backdrop.drawingContext;
 
   // 参考落日照片：橙金高空向低空的灰紫色过渡，保留海平线的暗层。
@@ -112,6 +179,16 @@ function buildScene() {
   ctx.restore();
   ctx.restore();
 
+  // 参考 august-night-osmanthus 枫叶版：固定星位，只有少数星星错开闪烁。
+  const starRandom = seededRandom(731029);
+  skyStars = Array.from({length: 84}, (_, i) => ({
+    x: (i % 12 + .12 + starRandom() * .76) / 12,
+    y: (Math.floor(i / 12) + .15 + starRandom() * .7) / 7,
+    seed: starRandom(), bright: i % 11 === 0,
+    // 每一行错开闪烁列，避免与星位的十二列排列重合在最左侧。
+    twinkling: i % 12 === (Math.floor(i / 12) * 5 + 2) % 12,
+    warm: i % 3 === 0
+  }));
   const next = seededRandom(860214);
   // 同一条波峰同时决定暗面、暖色天光和金色反射的位置。
   waterRows = Array.from({length: 100}, (_, i) => ({
@@ -148,12 +225,18 @@ function waterFacet(ctx, x1, y1, x2, y2, thickness, color) {
 
 function draw() {
   if (!backdrop) return;
-  const t = motionPreference.matches ? 0 : millis() / 1000;
+  const t = Math.min(sceneTime(), SCENE_DURATION - .001);
+  updatePlaybackControls();
   const ctx = drawingContext;
   const story = flightAt(t);
   const scale = Math.max(0.55, Math.min(1.5, height / 900));
   image(backdrop, 0, 0);
-  drawSun(ctx, sunX, sunY, story.restOpacity, true, story.eyeOpen);
+  drawSun(ctx, sunX, sunY, story.restOpacity, true, story.eyeOpen, story.face);
+  if (story.restOpacity > 0 && story.armOpacity > 0) {
+    ctx.save();ctx.beginPath();ctx.rect(0, 0, width, horizonY);ctx.clip();
+    ctx.translate(sunX, sunY);ctx.globalAlpha = story.restOpacity;
+    drawSunArms(ctx, story);ctx.restore();
+  }
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, horizonY, width, height - horizonY);
@@ -195,43 +278,222 @@ function draw() {
     }
   }
   ctx.restore();
+  drawWaterContact(ctx, t);
+  drawDusk(ctx, story.darkness);
+  drawStars(ctx, t, story.darkness);
   drawContrail(ctx, t);
   drawFlight(ctx, story);
 }
 
 
-// 一轮 66 秒：缓慢靠近 → 放绳 → 接住太阳 → 摆动飞走 → 尾流消散、日落重新出现。
-// 所有位置由时间直接计算，缩放窗口和暂停后不依赖之前的帧。
+// 找到回升的座板刚好托住太阳底部的时刻，而不是另做一个爬上去的动作。
+function findPickupTime() {
+  const deepY = height + sunR * 2;
+  const raisedY = horizonY - Math.max(sunR * 1.6, height * .065);
+  const contactY = sunY + sunR;
+  let low = 22, high = 32;
+  for (let i = 0; i < 36; i++) {
+    const mid = (low + high) / 2;
+    const seatY = deepY + (raisedY - deepY) * smoothstep(22, 32, mid);
+    if (seatY > contactY) low = mid;
+    else high = mid;
+  }
+  return (low + high) / 2;
+}
+
+// 一轮 78 秒：秋千探入海底并隐藏 → 缓慢收绳 → 太阳登板 → 负重爬升 → 夜色。
+// 用随时间衰减的摆动近似绳索受风和负重后的反应，保持任意时刻可重绘。
 function flightAt(time) {
-  const t = time % 66;
+  const t = time % SCENE_DURATION;
   const unit = Math.max(5, Math.min(16, sunR * 0.34));
   const approach = smoothstep(2, 14.5, t);
-  const depart = smoothstep(28, 54, t);
-  const board = smoothstep(20, 24, t);
-  const grow = smoothstep(19.7, 22, t);
+  const depart = smoothstep(40, 66, t);
+  const aboard = t >= pickupTime && t < 70;
+  const board = aboard ? 1 : 0;
   const deploy = smoothstep(14, 20, t);
   const x = -unit * 3 + (sunX + unit * 3) * approach
     + (width + sunR * 2.5 - sunX) * depart;
-  const y = height * 0.12 - height * 0.065 * depart;
-  const pivotY = y + unit * 0.65;
-  const seatY = horizonY - sunR * 0.1;
-  const length = Math.max(unit * 0.25, (seatY - (height * 0.12 + unit * 0.65)) * deploy);
-  const angle = Math.sin((t - 24) * 0.85) * 0.045 * smoothstep(24, 28, t);
+
+  // 降低巡航高度，登板后先被重量拽下，再恢复并抬头爬升。
+  const cruiseY = height * .22;
+  const loadTime = 32.5; // 收绳已把太阳带离水面一段，再承受完整重量。
+  const reach = smoothstep(loadTime + .18, loadTime + .62, t);
+  const impactTime = waterContacts[0]?.time ?? 18;
+  const awake = t < 70 ? smoothstep(impactTime, impactTime + .65, t) : 0;
+  const eyeOpen = awake * (.65 + .35 * smoothstep(impactTime + .7, impactTime + 1.7, t));
+  const alarm = smoothstep(loadTime, loadTime + .16, t) * (1 - smoothstep(loadTime + 1.05, loadTime + 4.3, t));
+  const tug = smoothstep(loadTime, loadTime + 1.1, t) * (1 - smoothstep(loadTime + 1.1, loadTime + 5.5, t));
+  const recovery = Math.sin(Math.max(0, t - (loadTime + 1.1)) * 2.1)
+    * Math.exp(-Math.max(0, t - (loadTime + 1.1)) * .85) * smoothstep(loadTime + 1.1, loadTime + 1.7, t);
+  const y = cruiseY + height * (.038 * tug + .005 * recovery) - height * .15 * depart;
+  const pitch = .065 * tug - .12 * smoothstep(loadTime + 2, loadTime + 6, t) * (1 - smoothstep(60, 66, t));
+  const pivotY = y + unit * .65;
+  const seatY = horizonY - Math.max(sunR * 1.6, height * .065);
+  const fullLength = seatY - (cruiseY + unit * .65);
+  const releaseAge = Math.max(0, t - 14);
+  const lowering = smoothstep(14, 15, t) * (1 - smoothstep(18.5, 20, t));
+  const payout = Math.sin(releaseAge * 3.2) * sunR * .08 * lowering;
+  const stretch = sunR * .08 * tug;
+  // 先放到画面底部以下，海水遮住座板；停两秒，再用十秒缓慢收回。
+  const deepLength = height + sunR * 2 - (cruiseY + unit * .65);
+  const retrieve = smoothstep(22, 32, t);
+  const retrievalSway = Math.sin((t - 22) * 1.2) * .014
+    * smoothstep(22, 23, t) * (1 - smoothstep(26, 28, t));
+  const length = Math.max(unit * .25,
+    deepLength * deploy + (fullLength - deepLength) * retrieve + payout + stretch);
+  const releaseSwing = Math.sin(releaseAge * 2.2) * .13 * Math.exp(-releaseAge * .18) * lowering;
+  const loadAge = Math.max(0, t - loadTime);
+  const loadSwing = Math.sin(loadAge * 1.75) * .055 * Math.exp(-loadAge * .3) * smoothstep(loadTime, loadTime + .5, t);
+  const cruisingSwing = Math.sin((t - 40) * .85) * .035 * smoothstep(40, 44, t);
+  const angle = releaseSwing + retrievalSway + loadSwing + cruisingSwing;
   const riderX = x - Math.sin(angle) * (length - sunR);
   const riderY = pivotY + Math.cos(angle) * (length - sunR);
-  const reset = smoothstep(61, 65, t);
-  const aboard = t >= 20 && t < 58;
-  return {t, unit, x, y, pivotY, length, angle, board, grow, deploy,
-    eyeOpen: aboard ? smoothstep(20, 21.2, t) : 0,
-    aboard, visible: t >= 2 && t < 58,
-    restOpacity: t < 20 ? 1 : (t >= 58 ? reset : 0),
-    sunX: aboard ? sunX + (riderX - sunX) * board : sunX,
-    sunY: sunY + (riderY - sunY) * board,
-    reflection: t < 20 ? 1 : (t < 58 ? 1 - depart : reset)
+  const reset = smoothstep(73, 77, t);
+  const darkness = (.18 * smoothstep(32, 40, t) + .82 * depart) * (1 - reset);
+  return {t, unit, x, y, pitch, pivotY, length, angle, board, reach, deploy, darkness,
+    eyeOpen, armOpacity: awake, face: {alarm},
+    aboard, visible: t >= 2 && t < 70,
+    restOpacity: t < pickupTime ? 1 : (t >= 70 ? reset : 0),
+    sunX: aboard ? riderX : sunX,
+    sunY: aboard ? riderY : sunY,
+    reflection: t < pickupTime ? 1 : (t < 70 ? (1 - depart) * (1 - smoothstep(pickupTime, 34, t) * .45) : reset)
   };
 }
 
-function drawSun(ctx, x, y, opacity, behindHorizon = false, eyeOpen = 0) {
+// 以座板实际穿过水面的时刻触发水花，拖动进度也能重现同一组涟漪。
+function findWaterContacts() {
+  return [{start: 14, end: 20, entering: true}, {start: 22, end: 32, entering: false}].map(event => {
+    let low = event.start, high = event.end;
+    for (let i = 0; i < 36; i++) {
+      const mid = (low + high) / 2;
+      const s = flightAt(mid);
+      const seatY = s.pivotY + Math.cos(s.angle) * s.length;
+      if (event.entering ? seatY < horizonY : seatY > horizonY) low = mid;
+      else high = mid;
+    }
+    const time = (low + high) / 2;
+    const s = flightAt(time);
+    return {time, entering: event.entering, x: s.x - Math.sin(s.angle) * s.length};
+  });
+}
+
+function drawWaterContact(ctx, time) {
+  const t = time % SCENE_DURATION;
+  const r = sunR;
+  ctx.save();ctx.lineCap = 'round';
+  for (const event of waterContacts) {
+    const age = t - event.time;
+    if (age < 0 || age > 4.5) continue;
+    // 扁平水环由接触点向两侧铺开，留在海面上。
+    ctx.save();ctx.beginPath();ctx.rect(0, horizonY, width, height - horizonY);ctx.clip();
+    for (let i = 0; i < 3; i++) {
+      const u = (age - i * .24) / 3.5;
+      if (u <= 0 || u >= 1) continue;
+      const spread = r * (.95 + u * 3.5);
+      ctx.strokeStyle = rgba(255, 216, 155, Math.sin(Math.PI * u) * (1 - u) * (event.entering ? .55 : .38));
+      ctx.lineWidth = Math.max(.75, r * .027) * (1 - u * .4);
+      ctx.beginPath();ctx.ellipse(event.x, horizonY + r * .035, spread,
+        r * (.03 + u * .24), 0, 0, Math.PI * 2);ctx.stroke();
+    }
+    ctx.restore();
+    if (event.entering) {
+      // 入水的一瞬溅起短小水珠，随后落回水面。
+      for (let i = 0; i < 10; i++) {
+        const life = .55 + (i % 3) * .13;
+        const u = age / life;
+        if (u <= 0 || u >= 1) continue;
+        const side = i % 2 ? -1 : 1;
+        const x = event.x + side * r * (.5 + i * .075 + u * .32);
+        const y = horizonY - Math.sin(Math.PI * u) * r * (.16 + (i % 4) * .075);
+        ctx.fillStyle = rgba(255, 231, 187, Math.sin(Math.PI * u) * .7);
+        ctx.beginPath();ctx.ellipse(x, y, Math.max(.7, r * .018), Math.max(1, r * .04), side * .25, 0, Math.PI * 2);ctx.fill();
+      }
+    } else {
+      // 板边带出的水沿重力方向滴落，座板继续随吊绳上升。
+      for (let i = 0; i < 10; i++) {
+        const emitted = event.time + .12 + i * .14;
+        const elapsed = t - emitted;
+        if (elapsed <= 0 || elapsed > 1.1) continue;
+        const s = flightAt(emitted);
+        const edge = (i % 2 ? -1 : 1) * r * 1.23;
+        const x = s.x + edge * Math.cos(s.angle) - s.length * Math.sin(s.angle);
+        const y = s.pivotY + edge * Math.sin(s.angle) + s.length * Math.cos(s.angle) + height * .17 * elapsed * elapsed;
+        if (y >= horizonY) continue;
+        ctx.fillStyle = rgba(255, 233, 194, .6 * (1 - elapsed / 1.1));
+        ctx.beginPath();ctx.ellipse(x, y, Math.max(.65, r * .016), Math.max(1.2, r * .045), 0, 0, Math.PI * 2);ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawDusk(ctx, darkness) {
+  if (darkness <= 0) return;
+  ctx.save();
+  // 夜色覆盖天空和水纹，太阳本身与秋千在这层之后绘制。
+  const shade = ctx.createLinearGradient(0, 0, 0, height);
+  shade.addColorStop(0, rgba(12, 20, 42, darkness * .9));
+  shade.addColorStop(.76, rgba(29, 26, 43, darkness * .86));
+  shade.addColorStop(.765, rgba(15, 24, 39, darkness * .86));
+  shade.addColorStop(1, rgba(7, 16, 29, darkness * .93));
+  ctx.fillStyle = shade;ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+}
+
+function skyStarAt(star, time, darkness) {
+  const visibility = smoothstep(star.bright ? .24 : .34 + star.seed * .14,
+    star.bright ? .76 : .82 + star.seed * .15, darkness);
+  const period = 3.6 + star.seed * 2.4;
+  const phase = ((time + star.seed * period) % period + period) % period;
+  const twinkle = star.twinkling && !motionPreference.matches
+    ? smoothstep(0, .45, phase) * (1 - smoothstep(.45, 1.3, phase)) : 0;
+  const restingAlpha = (star.bright ? .92 : .3 + star.seed * .25) * (star.twinkling ? .6 : 1);
+  const restingRadius = star.bright ? 1.35 + star.seed * .45 : .55 + star.seed * .5;
+  return {
+    visibility, twinkle,
+    alpha: visibility * (restingAlpha + (.98 - restingAlpha) * twinkle),
+    radius: restingRadius + (2.2 + star.seed * .4 - restingRadius) * twinkle
+  };
+}
+
+function drawStars(ctx, time, darkness) {
+  if (darkness <= .24) return;
+  const scale = Math.max(.65, Math.min(1.35, Math.min(width / 1100, height / 850)));
+  ctx.save();ctx.beginPath();ctx.rect(0, 0, width, horizonY);ctx.clip();
+  for (const star of skyStars) {
+    const light = skyStarAt(star, time, darkness);
+    if (light.alpha < .002) continue;
+    const x = star.x * width;
+    const y = (.04 + star.y * .86) * horizonY;
+    ctx.save();ctx.translate(x, y);ctx.scale(scale, scale);
+    // 从枫叶版的 drawGlint 沿用小光核与逐渐收细的横竖光芒。
+    if (light.twinkle > .001) {
+      ctx.save();ctx.globalAlpha = light.visibility * light.twinkle;
+      const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 4.5);
+      halo.addColorStop(0, 'rgba(255,250,223,.8)');
+      halo.addColorStop(.25, 'rgba(255,230,161,.22)');
+      halo.addColorStop(1, 'rgba(255,219,133,0)');
+      ctx.fillStyle = halo;ctx.beginPath();ctx.arc(0, 0, 4.5, 0, Math.PI * 2);ctx.fill();
+      const reach = 22 * (.5 + .5 * light.twinkle);
+      for (const angle of [0, Math.PI / 2]) {
+        ctx.save();ctx.rotate(angle);
+        const ray = ctx.createLinearGradient(-reach, 0, reach, 0);
+        for (const [stop, color] of [[0,'rgba(255,220,110,0)'],[.4,'rgba(255,241,185,.65)'],
+          [.5,'#fffdf0'],[.6,'rgba(255,241,185,.65)'],[1,'rgba(255,220,110,0)']]) ray.addColorStop(stop, color);
+        ctx.strokeStyle = ray;ctx.lineWidth = .65;
+        ctx.beginPath();ctx.moveTo(-reach, 0);ctx.lineTo(reach, 0);ctx.stroke();ctx.restore();
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = light.alpha;
+    ctx.fillStyle = star.warm ? '#fff0d1' : '#eef3ff';
+    ctx.beginPath();ctx.arc(0, 0, light.radius, 0, Math.PI * 2);ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawSun(ctx, x, y, opacity, behindHorizon = false, eyeOpen = 0, face = {}) {
   if (opacity <= 0) return;
   ctx.save();
   ctx.globalAlpha = opacity;
@@ -243,16 +505,23 @@ function drawSun(ctx, x, y, opacity, behindHorizon = false, eyeOpen = 0) {
     [.58, '#eb8b2b'], [.8, '#dd602c'], [1, '#c84635']]) sun.addColorStop(stop, color);
   ctx.fillStyle = sun;
   ctx.beginPath(); ctx.arc(x, y, sunR, 0, Math.PI * 2); ctx.fill();
-  // 秋千降到位后才出现眼睛，由细缝舒展成圆点；新一轮恢复无眼睛的太阳。
+  // 入水声惊醒太阳；失衡时瞪眼，随后慢慢恢复原来的平静圆眼睛。
   if (eyeOpen > 0) {
     ctx.fillStyle = '#151515';
-    const radius = Math.max(1.25, sunR * .085);
+    const alarm = face.alarm || 0;
+    const radius = Math.max(1.25, sunR * .085) * (1 + alarm * .35);
     for (const eyeX of [-.48, .18]) {
       ctx.beginPath();
       ctx.ellipse(x + eyeX * sunR, y - sunR * .24,
-        radius, radius * eyeOpen, 0, 0, Math.PI * 2);
+        radius, radius * eyeOpen * (1 + alarm * .12), 0, 0, Math.PI * 2);
       ctx.fill();
     }
+    if (alarm > .001) {
+      ctx.save();ctx.globalAlpha *= alarm;
+      ctx.beginPath();ctx.ellipse(x - sunR * .15, y + sunR * .2,
+        sunR * .072, sunR * .105, 0, 0, Math.PI * 2);ctx.fill();ctx.restore();
+    }
+
   }
   ctx.restore();
 }
@@ -286,11 +555,11 @@ function drawAirplane(ctx, unit) {
 // 从飞机经过的历史位置绘制尾流，旧段逐渐变宽、漂移和消散。
 // 不累积帧缓存，循环、缩放与减少动态效果设置都能得到一致的画面。
 function contrailSegments(time) {
-  const t = time % 66;
-  const fade = 1 - smoothstep(61, 66, t);
+  const t = time % SCENE_DURATION;
+  const fade = 1 - smoothstep(73, 78, t);
   const segments = [];
   const start = Math.max(2, t - 12);
-  const end = Math.min(t, 57);
+  const end = Math.min(t, 69);
   const step = 0.15;
   const scale = Math.max(.6, Math.min(1.5, height / 900));
   for (let emitted = start; emitted < end; emitted += step) {
@@ -303,9 +572,11 @@ function contrailSegments(time) {
     if (alpha < .002) continue;
     const point = (state, sampleTime, side) => {
       const elapsed = t - sampleTime;
+      const tailX = -state.unit * 1.35;
+      const tailY = state.unit * (.08 + side * .14);
       return {
-        x: state.x - state.unit * 1.35 - elapsed * scale * .9,
-        y: state.y + state.unit * (.08 + side * .14)
+        x: state.x + tailX * Math.cos(state.pitch) - tailY * Math.sin(state.pitch) - elapsed * scale * .9,
+        y: state.y + tailX * Math.sin(state.pitch) + tailY * Math.cos(state.pitch)
           + elapsed * scale * .35
           + Math.sin(sampleTime * .7 + side) * elapsed * scale * .1
       };
@@ -333,13 +604,32 @@ function drawContrail(ctx, time) {
 
 // 两条绳子直接连接机身与座板；握点使用相同的绳线位置。
 function ropeAt(story, side, localY) {
-  const anchorX = side * story.unit * .75;
-  const anchorY = -story.unit * .5;
+  const mountX = side * story.unit * .75;
+  const mountY = story.unit * .15;
+  const anchorX = mountX * Math.cos(story.pitch) - mountY * Math.sin(story.pitch);
+  const anchorY = mountX * Math.sin(story.pitch) + mountY * Math.cos(story.pitch) - story.unit * .65;
   const topX = anchorX * Math.cos(story.angle) + anchorY * Math.sin(story.angle);
   const topY = -anchorX * Math.sin(story.angle) + anchorY * Math.cos(story.angle);
   const bottomX = side * sunR * 1.42 * story.deploy;
   const fraction = Math.max(0, Math.min(1, (localY - topY) / (story.length - topY)));
   return {topX, topY, bottomX, x: topX + (bottomX - topX) * fraction};
+}
+
+function drawReelingRope(ctx, story, side) {
+  const reeling = smoothstep(22, 23, story.t) * (1 - smoothstep(31, 32, story.t));
+  if (reeling <= 0) return;
+  ctx.save();
+  ctx.strokeStyle = rgba(255, 242, 195, reeling * .8);
+  ctx.lineWidth = Math.max(1.6, sunR * .045);
+  const spacing = Math.max(18, height * .045);
+  // 标记固定在绳子上，距座板不变；收绳时沿吊索向机身移动。
+  for (let distance = spacing; distance < story.length; distance += spacing) {
+    const y1 = story.length - distance;
+    const y2 = Math.min(story.length, y1 + Math.max(3, sunR * .12));
+    const a = ropeAt(story, side, y1), b = ropeAt(story, side, y2);
+    ctx.beginPath();ctx.moveTo(a.x, y1);ctx.lineTo(b.x, y2);ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawSwingSeat(ctx, halfWidth, y, radius, deploy) {
@@ -367,11 +657,53 @@ function drawSwingSeat(ctx, halfWidth, y, radius, deploy) {
   ctx.restore();
 }
 
+// 惊醒后双手自然垂在身体外侧，负重失衡时沿同一条动作轨迹抬起抓绳。
+function drawSunArms(ctx, story) {
+  if (story.armOpacity <= 0) return;
+  const r = sunR;
+  ctx.save();ctx.globalAlpha *= story.armOpacity;
+  ctx.strokeStyle = '#151515';ctx.fillStyle = '#151515';
+  ctx.lineWidth = Math.max(1.15, r * .065);ctx.lineCap = 'round';
+  for (const side of [-1, 1]) {
+    const reach = story.reach;
+    const restingShoulderY = r * (side < 0 ? .25 : .28);
+    const shoulderX = side * r * .94;
+    const shoulderY = restingShoulderY + (r * .055 - restingShoulderY) * reach;
+    const gripY = r * (.055 + (side < 0 ? -.11 : .15));
+    const grip = ropeAt(story, side, story.length - r + gripY);
+    // 放松时肘部只略向外，前臂回落到肩膀下方，左右手高度稍有差别。
+    // 抵消秋千的转角，让垂下的手臂仍接近重力方向。
+    const gravityAngle = -story.angle * story.board;
+    const hangingPoint = (dx, dy) => ({
+      x: shoulderX + dx * Math.cos(gravityAngle) - dy * Math.sin(gravityAngle),
+      y: restingShoulderY + dx * Math.sin(gravityAngle) + dy * Math.cos(gravityAngle)
+    });
+    const restElbow = hangingPoint(side * r * .035, r * .17);
+    const restWrist = hangingPoint(side * r * .008, r * .4);
+    const restHand = hangingPoint(-side * r * .018, r * (side < 0 ? .53 : .55));
+    const handX = restHand.x + (grip.x - restHand.x) * reach;
+    const handY = restHand.y + (gripY - restHand.y) * reach;
+    const raisedElbowX = shoulderX + (handX - shoulderX) * .45;
+    const raisedWristX = handX - side * r * .05;
+    const raisedWristY = handY - r * (side < 0 ? -.015 : .12);
+    ctx.beginPath();ctx.moveTo(shoulderX, shoulderY);
+    ctx.bezierCurveTo(restElbow.x + (raisedElbowX - restElbow.x) * reach,
+      restElbow.y + (shoulderY - restElbow.y) * reach,
+      restWrist.x + (raisedWristX - restWrist.x) * reach,
+      restWrist.y + (raisedWristY - restWrist.y) * reach, handX, handY);ctx.stroke();
+    ctx.beginPath();ctx.ellipse(handX, handY, r * (.065 + .012 * reach), r * .09,
+      gravityAngle * (1 - reach) + side * .35 * reach, 0, Math.PI * 2);ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawFlight(ctx, story) {
   if (!story.visible) return;
   const r = sunR;
-  // 只保留两条吊绳与座板，上端随飞机、下端随秋千摆动。
-  ctx.save();ctx.translate(story.x, story.pivotY);ctx.rotate(story.angle);
+  // 海面遮住水下的绳索和座板，收绳时从同一位置自然露出。
+  ctx.save();
+  ctx.beginPath();ctx.rect(0, 0, width, horizonY);ctx.clip();
+  ctx.translate(story.x, story.pivotY);ctx.rotate(story.angle);
   ctx.strokeStyle = '#ffffff';ctx.lineWidth = Math.max(0.9, r * .024);ctx.lineCap = 'round';
   const halfSeat = r * 1.42 * story.deploy;
   if (story.deploy > 0) {
@@ -379,6 +711,7 @@ function drawFlight(ctx, story) {
       const rope = ropeAt(story, side, story.length);
       ctx.beginPath();ctx.moveTo(rope.topX, rope.topY);
       ctx.lineTo(rope.bottomX, story.length);ctx.stroke();
+      drawReelingRope(ctx, story, side);
     }
     drawSwingSeat(ctx, halfSeat, story.length, r, story.deploy);
   }
@@ -386,43 +719,28 @@ function drawFlight(ctx, story) {
 
   if (story.aboard) {
     ctx.save();
-    // 登上秋千时仍由海平线遮住太阳下沿，离开海面后自然露出全身。
-    if (story.board < 1) {ctx.beginPath();ctx.rect(0, 0, width, horizonY);ctx.clip();}
+    // 座板、太阳与手脚接受同一海面遮挡，随收绳一起露出水面。
+    ctx.beginPath();ctx.rect(0, 0, width, horizonY);ctx.clip();
     ctx.translate(story.sunX, story.sunY);ctx.rotate(story.angle * story.board);
-    drawSun(ctx, 0, 0, 1, false, story.eyeOpen);
     ctx.strokeStyle = '#151515';ctx.fillStyle = '#151515';
     ctx.lineWidth = Math.max(1.15, r * .065);ctx.lineCap = 'round';
-    const grow = story.grow;
-    // 参考图的双腿从太阳下缘伸出，膝盖向左弯，脚掌是短小的圆头。
+    // 双腿始终保持完整长度；身体与海面遮住上端和水下部分，提起时自然显露。
     for (const side of [-1, 1]) {
       const sway = Math.sin(story.t * .75 + side * .2) * .012 * story.board;
       const hipX = r * (side < 0 ? -.32 : .36);
       const hipY = r * .68;
-      const footX = hipX - r * (.2 + sway) * grow;
-      const footY = hipY + r * (side < 0 ? .58 : .63) * grow;
+      const footX = hipX - r * (.2 + sway);
+      const footY = hipY + r * (side < 0 ? .58 : .63);
       ctx.beginPath();ctx.moveTo(hipX, hipY);
-      ctx.bezierCurveTo(hipX - r * .31 * grow, hipY,
-        footX + r * .04 * grow, footY - r * .23 * grow, footX, footY);ctx.stroke();
+      ctx.bezierCurveTo(hipX - r * .31, hipY,
+        footX + r * .04, footY - r * .23, footX, footY);ctx.stroke();
       ctx.beginPath();
-      ctx.ellipse(footX - r * .025 * grow, footY, r * .09 * grow,
-        r * .072 * grow, -.15, 0, Math.PI * 2);ctx.fill();
+      ctx.ellipse(footX - r * .025, footY, r * .09,
+        r * .072, -.15, 0, Math.PI * 2);ctx.fill();
     }
-    // 左手稍抬起，右手向下勾；端点仍取自两条吊绳。
-    for (const side of [-1, 1]) {
-      const shoulderX = side * r * .93;
-      const shoulderY = r * .055;
-      const handY = shoulderY + r * (side < 0 ? -.11 : .15) * grow;
-      const grip = ropeAt(story, side, story.length - r + handY);
-      const handX = shoulderX + (grip.x - shoulderX) * grow;
-      ctx.beginPath();ctx.moveTo(shoulderX, shoulderY);
-      ctx.bezierCurveTo(shoulderX + (handX - shoulderX) * .45, shoulderY,
-        handX - side * r * .05 * grow, handY - r * (side < 0 ? -.015 : .12) * grow,
-        handX, handY);ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(handX, handY, r * .077 * grow, r * .09 * grow,
-        side * .35, 0, Math.PI * 2);ctx.fill();
-    }
+    drawSun(ctx, 0, 0, 1, false, story.eyeOpen, story.face);
+    drawSunArms(ctx, story);
     ctx.restore();
   }
-  ctx.save();ctx.translate(story.x, story.y);drawAirplane(ctx, story.unit);ctx.restore();
+  ctx.save();ctx.translate(story.x, story.y);ctx.rotate(story.pitch);drawAirplane(ctx, story.unit);ctx.restore();
 }

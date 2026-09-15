@@ -7,9 +7,38 @@
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; background: #f69b18; }
     canvas { display: block; }
+    .playback {
+      position: fixed; z-index: 2; left: 50%; bottom: max(16px, env(safe-area-inset-bottom));
+      transform: translateX(-50%); box-sizing: border-box;
+      width: min(640px, calc(100% - 28px)); display: flex; align-items: center; gap: 14px;
+      padding: 10px 14px; border: 1px solid #ffffff26; border-radius: 14px;
+      background: #15202bc9; backdrop-filter: blur(12px); color: #fff5e5;
+      font: 13px/1.4 system-ui, sans-serif;
+    }
+    .playback button { flex: 0 0 54px; padding: 7px 0; border: 0; border-radius: 7px;
+      background: #ffffff18; color: inherit; font: inherit; cursor: pointer; }
+    .playback button:hover { background: #ffffff2b; }
+    .playback input { --progress: 0%; flex: 1; min-width: 0; margin: 0; height: 26px;
+      appearance: none; -webkit-appearance: none; background: transparent; cursor: pointer; }
+    .playback input::-webkit-slider-runnable-track { height: 4px; border-radius: 4px;
+      background: linear-gradient(to right, #f3c680 var(--progress), #ffffff38 var(--progress)); }
+    .playback input::-webkit-slider-thumb { appearance: none; -webkit-appearance: none;
+      width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: #fff2d9; }
+    .playback input::-moz-range-track { height: 4px; border-radius: 4px; background: #ffffff38; }
+    .playback input::-moz-range-progress { height: 4px; background: #f3c680; }
+    .playback input::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: #fff2d9; }
+    .playback :focus-visible { outline: 2px solid #f3c680; outline-offset: 3px; }
+    .playback output { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
+    @media (max-width: 420px) { .playback { gap: 9px; padding: 8px 10px; } }
   </style>
 </head>
 <body>
+  <div class="playback" role="group" aria-label="动画播放控制">
+    <button id="play-toggle" type="button" disabled>播放</button>
+    <input id="play-progress" type="range" min="0" max="78" step="0.05" value="0"
+      aria-label="动画进度" disabled>
+    <output id="play-time" for="play-progress">00:00 / 01:18</output>
+  </div>
   <script src="p5.min.js"></script>
   <script src="sketch.js"></script>
 </body>
