@@ -2,28 +2,44 @@
 // 天空保留连续渐变，海面的反光与波纹使用同一组形状。
 // 这是基于反射规律的视觉近似，不是完整的光线追踪或流体模拟。
 let backdrop;
+let waterBrushes;
+let controlsStamp = -Infinity;
 let horizonY, sunX, sunY, sunR;
 let pickupTime = 19;
 let waterContacts = [];
+let waterDrops = [];
+let soundEvents = [];
 let waterRows = [];
 let skyStars = [];
 let motionPreference;
-const SCENE_DURATION = 70;
-const playback = {time: 0, stamp: 0, playing: false, running: false};
-let playButton, progressInput, timeOutput;
+const SCENE_DURATION = 65;
+const playback = {time: 0, stamp: 0, playing: false, running: false, rate: 1};
+let playButton, progressInput, timeOutput, speedButton, soundButton;
+const sceneSound = new SceneSound();
 let draggingProgress = false, resumeAfterDrag = false;
 
 function setup() {
   pixelDensity(Math.min(window.devicePixelRatio || 1, 2));
-  const surface = createCanvas(windowWidth, windowHeight);
+  const size = sceneSize();
+  const surface = createCanvas(size.width, size.height);
   surface.elt.setAttribute('role', 'img');
   surface.elt.setAttribute('aria-label', '夕阳海面上，飞机放下秋千，太阳长出手脚握住绳子，坐着秋千向右飞去，夜色渐深，星星逐渐显现');
-  frameRate(30);
+  frameRate(60);
   motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
   motionPreference.addEventListener('change', () => {
     playback.playing = !motionPreference.matches;
+    soundEvents = makeSoundEvents();
+    sceneSound.setEvents(soundEvents);
     updatePlayback();
   });
+  sceneSound.getFrame = soundFrame;
+  sceneSound.onError = error => {
+    soundButton.textContent = '音效重试';
+    soundButton.title = error.message;
+    soundButton.setAttribute('aria-pressed', 'false');
+    soundButton.setAttribute('aria-label', '重试开启音效');
+    soundButton.disabled = false;
+  };
   setupPlaybackControls();
   playback.playing = !motionPreference.matches;
   document.addEventListener('visibilitychange', updatePlayback);
@@ -33,7 +49,7 @@ function setup() {
 
 function sceneTime() {
   if (!playback.running) return playback.time;
-  return (playback.time + Math.max(0, millis() - playback.stamp) / 1000) % SCENE_DURATION;
+  return Math.min(SCENE_DURATION, playback.time + Math.max(0, millis() - playback.stamp) / 1000 * playback.rate);
 }
 
 function updatePlayback() {
@@ -46,15 +62,51 @@ function updatePlayback() {
     if (!document.hidden) redraw();
   }
   updatePlaybackControls();
+  updateSound();
 }
 
 function setupPlaybackControls() {
   playButton = document.getElementById('play-toggle');
   progressInput = document.getElementById('play-progress');
   timeOutput = document.getElementById('play-time');
+  soundButton = document.getElementById('play-sound');
+  soundButton.disabled = false;
+  soundButton.addEventListener('click', async () => {
+    soundButton.disabled = true;
+    try {
+      await sceneSound.setEnabled(!sceneSound.enabled);
+      soundButton.textContent = sceneSound.enabled ? '声音开' : '声音关';
+      soundButton.setAttribute('aria-pressed', String(sceneSound.enabled));
+      soundButton.setAttribute('aria-label', sceneSound.enabled ? '关闭音效' : '开启音效');
+      soundButton.disabled = false;
+      soundButton.title = '开启海浪、飞机、落水、滴水与星光音效';
+      updateSound();
+    } catch (error) {
+      soundButton.textContent = '音效重试';
+      soundButton.setAttribute('aria-pressed', 'false');
+      soundButton.setAttribute('aria-label', '重试开启音效');
+      soundButton.title = error.message;
+      soundButton.disabled = false;
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    sceneSound.silence();
+  });
+  speedButton = document.getElementById('play-speed');
+  speedButton.disabled = false;
+  speedButton.addEventListener('click', () => {
+    playback.time = sceneTime();
+    playback.stamp = millis();
+    const rates = [.5, 1, 1.5, 2, 3];
+    playback.rate = rates[(rates.indexOf(playback.rate) + 1) % rates.length];
+    sceneSound.invalidate();
+    updatePlaybackControls();
+    updateSound();
+  });
   playButton.disabled = false; progressInput.disabled = false;
   progressInput.max = SCENE_DURATION;
   playButton.addEventListener('click', () => {
+    if (!playback.playing && playback.time >= SCENE_DURATION) playback.time = 0;
     playback.playing = !playback.playing;
     updatePlayback();
   });
@@ -67,7 +119,9 @@ function setupPlaybackControls() {
   progressInput.addEventListener('input', () => {
     playback.time = Math.max(0, Math.min(SCENE_DURATION, Number(progressInput.value)));
     playback.stamp = millis();
+    sceneSound.invalidate();
     updatePlaybackControls();
+    updateSound();
     if (!playback.running) redraw();
   });
   const finishDrag = () => {
@@ -81,20 +135,55 @@ function setupPlaybackControls() {
   window.addEventListener('blur', finishDrag);
 }
 
-function updatePlaybackControls() {
+function updatePlaybackControls(force = true) {
   if (!playButton) return;
+  const now = millis();
+  if (!force && now - controlsStamp < 100) return;
+  controlsStamp = now;
   const t = sceneTime();
+  speedButton.textContent = `${playback.rate}×`;
+  speedButton.setAttribute('aria-label', `播放速度 ${playback.rate} 倍，点击切换`);
   const clockText = value => `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(Math.floor(value % 60)).padStart(2, '0')}`;
-  playButton.textContent = playback.playing ? '暂停' : '播放';
-  playButton.setAttribute('aria-label', playback.playing ? '暂停动画' : '播放动画');
+  playButton.textContent = playback.playing ? '暂停' : t >= SCENE_DURATION ? '重播' : '播放';
+  playButton.setAttribute('aria-label', playback.playing ? '暂停动画' : t >= SCENE_DURATION ? '重播动画' : '播放动画');
   if (!draggingProgress) progressInput.value = t;
   progressInput.style.setProperty('--progress', `${t / SCENE_DURATION * 100}%`);
   progressInput.setAttribute('aria-valuetext', `${clockText(t)}，共 ${clockText(SCENE_DURATION)}`);
   timeOutput.textContent = `${clockText(t)} / ${clockText(SCENE_DURATION)}`;
 }
 
+// 竖版缩短两段横向飞行，入水、托举和负重动作仍保持原来的时长。
+function storyTime(time) {
+  if (document.body.dataset.aspect !== '3:4') return time;
+  if (time <= .6) return time * 2 / .6;
+  if (time <= 6.5) return 2 + (time - .6) * 12.5 / 5.9;
+  if (time <= 24) return time + 8;
+  if (time <= 37) return 32 + (time - 24) * 2;
+  return time + 21;
+}
+
+// 动作事件先换算成当前版本的播放时刻，音效与画面共用同一时钟。
+function sceneTimeForAction(time) {
+  if (document.body.dataset.aspect !== '3:4') return time;
+  if (time <= 2) return time * .6 / 2;
+  if (time <= 14.5) return .6 + (time - 2) * 5.9 / 12.5;
+  if (time <= 32) return time - 8;
+  if (time <= 58) return 24 + (time - 32) / 2;
+  return time - 21;
+}
+
+function sceneSize() {
+  if (document.body.dataset.aspect !== '3:4') return {width: windowWidth, height: windowHeight};
+  // 竖版完整适配窗口，底部留出独立控制区，不裁切画面。
+  const availableWidth = Math.max(3, windowWidth - 24);
+  const availableHeight = Math.max(4, windowHeight - (windowWidth <= 580 ? 150 : 110));
+  const width = Math.min(availableWidth, availableHeight * .75);
+  return {width, height: width * 4 / 3};
+}
+
 function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
+  const size = sceneSize();
+  resizeCanvas(size.width, size.height);
   buildScene();
   if (!playback.running) redraw();
 }
@@ -125,6 +214,7 @@ function buildScene() {
   sunY = horizonY - sunR * 0.76;
   pickupTime = findPickupTime();
   waterContacts = findWaterContacts();
+  waterDrops = makeWaterDrops();
   const ctx = backdrop.drawingContext;
 
   // 参考落日照片：橙金高空向低空的灰紫色过渡，保留海平线的暗层。
@@ -145,54 +235,14 @@ function buildScene() {
   ctx.fillStyle = sea;
   ctx.fillRect(0, horizonY, width, height - horizonY);
 
-  // 天光在海面形成宽阔的暖色过渡，范围超出中央直接反光。
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, horizonY, width, height - horizonY);
-  ctx.clip();
-  ctx.translate(sunX, horizonY);
-  const lightRadius = Math.max(width * 0.72, sunR * 3);
-  ctx.scale(1, (height - horizonY) * 0.7 / lightRadius);
-  const reflectedSky = ctx.createRadialGradient(0, 0, 0, 0, 0, lightRadius);
-  reflectedSky.addColorStop(0, 'rgba(244,161,95,0.12)');
-  reflectedSky.addColorStop(0.48, 'rgba(244,161,95,0.05)');
-  reflectedSky.addColorStop(1, 'rgba(255,192,153,0)');
-  ctx.fillStyle = reflectedSky;
-  ctx.fillRect(-lightRadius, 0, lightRadius * 2, lightRadius);
-  ctx.restore();
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, width, horizonY);
-  ctx.clip();
-  // 微弱暖光横向铺开，避免覆盖低空的灰紫暗层。
-  const glowRadius = Math.max(width * 0.7, horizonY * 1.25);
-  ctx.save();
-  ctx.translate(sunX, horizonY);
-  ctx.scale(1, horizonY * 0.62 / glowRadius);
-  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, glowRadius);
-  glow.addColorStop(0, 'rgba(255,174,83,0.08)');
-  glow.addColorStop(0.45, 'rgba(255,179,99,0.04)');
-  glow.addColorStop(1, 'rgba(255,198,156,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(-glowRadius, -glowRadius, glowRadius * 2, glowRadius);
-  ctx.restore();
-  ctx.restore();
-
-  // 参考 august-night-osmanthus 枫叶版：固定星位，只有少数星星错开闪烁。
-  const starRandom = seededRandom(731029);
-  skyStars = Array.from({length: 84}, (_, i) => ({
-    x: (i % 12 + .12 + starRandom() * .76) / 12,
-    y: (Math.floor(i / 12) + .15 + starRandom() * .7) / 7,
-    seed: starRandom(), bright: i % 11 === 0,
-    // 每一行错开闪烁列，避免与星位的十二列排列重合在最左侧。
-    twinkling: i % 12 === (Math.floor(i / 12) * 5 + 2) % 12,
-    warm: i % 3 === 0
-  }));
+  if (!waterBrushes) waterBrushes = makeWaterBrushes();
+  skyStars = makeSkyStars();
+  soundEvents = makeSoundEvents();
+  sceneSound.setEvents(soundEvents);
   const next = seededRandom(860214);
   // 同一条波峰同时决定暗面、暖色天光和金色反射的位置。
-  waterRows = Array.from({length: 100}, (_, i) => ({
-    depth: Math.pow((i + 0.35) / 100, 1.7),
+  waterRows = Array.from({length: 72}, (_, i) => ({
+    depth: Math.pow((i + .15 + next() * .7) / 72, 1.7),
     phase: next() * Math.PI * 2,
     weight: 0.65 + next() * 0.7
   }));
@@ -200,15 +250,18 @@ function buildScene() {
 
 function waveAt(x, row, time, scale) {
   const d = row.depth;
-  const phase = x / (32 + d * 105) + row.phase;
-  const swell = Math.sin(phase + time * 0.65) * 0.6
-    + Math.sin(phase * 2.3 - time * 0.43 + d * 42) * 0.28
-    + Math.sin(phase * 5.7 + time * 0.8) * 0.12;
+  // 两组不同方向的波相互叠加；相邻水面共享波相，避免每行各自振动。
+  const u = x / (25 + d * 110);
+  const a = u * .85 + d * 43 - time * .46;
+  const b = u * 1.53 - d * 67 + time * .32;
+  const c = u * 3.7 + d * 115 - time * .61;
+  const swell = Math.sin(a) * .6 + Math.sin(b) * .28 + Math.sin(c) * .12;
+  const facing = Math.cos(a) * .5 + Math.cos(b) * .32 + Math.cos(c) * .18;
+  const patch = smoothstep(-.65, .65, Math.sin(u * .57 - d * 29 + time * .17)
+    * .65 + Math.sin(u * 2.17 + d * 81 - time * .29) * .35);
   return {
-    y: horizonY + d * (height - horizonY) + swell * (0.3 + d * 5) * scale,
-    facing: Math.sin(phase * 1.4 + time * 0.7 + d * 65) * 0.55
-      + Math.sin(phase * 4.1 - time * 0.55) * 0.3
-      + Math.sin(phase * 9.3 + time * 0.9) * 0.15
+    y: horizonY + d * (height - horizonY) + swell * (.2 + d * 4) * scale,
+    facing, patch
   };
 }
 
@@ -223,14 +276,45 @@ function waterFacet(ctx, x1, y1, x2, y2, thickness, color) {
   ctx.fill();
 }
 
+// 将柔和边缘预先画成小贴片，避免每帧为每个亮斑创建渐变。
+function makeWaterBrushes() {
+  return Array.from({length: 17}, (_, i) => {
+    const canvas = document.createElement('canvas');canvas.width = 8;canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    const color = i === 16 ? [255, 235, 195] : [246, 180 + i * 32 / 15, 105 + i * 48 / 15];
+    const gradient = ctx.createLinearGradient(0, 0, 0, 32);
+    for (const [stop, alpha] of [[0,0],[.35,.75],[.55,1],[1,0]]) {
+      gradient.addColorStop(stop, rgba(...color, alpha));
+    }
+    ctx.fillStyle = gradient;ctx.fillRect(0, 0, 8, 32);
+    return canvas;
+  });
+}
+
+function softWaterFacet(ctx, x1, y1, x2, y2, thickness, brush, alpha) {
+  if (alpha < .001) return;
+  const feather = Math.max(.65, thickness * .7);
+  ctx.save();ctx.globalAlpha *= alpha;
+  ctx.transform(1, (y2 - y1) / (x2 - x1), 0, 1, x1, y1);
+  ctx.drawImage(waterBrushes[brush], 0, -feather, x2 - x1 + .2, thickness + feather * 2);
+  ctx.restore();
+}
+
 function draw() {
   if (!backdrop) return;
-  const t = Math.min(sceneTime(), SCENE_DURATION - .001);
-  updatePlaybackControls();
+  const t = sceneTime();
+  if (t >= SCENE_DURATION && playback.running) {
+    playback.time = SCENE_DURATION;
+    playback.running = false;playback.playing = false;
+    noLoop();
+  }
+  updatePlaybackControls(false);
   const ctx = drawingContext;
-  const story = flightAt(t);
+  const actionTime = storyTime(t);
+  const story = flightAt(actionTime);
   const scale = Math.max(0.55, Math.min(1.5, height / 900));
   image(backdrop, 0, 0);
+  drawSunlight(ctx, story);
   drawSun(ctx, sunX, sunY, story.restOpacity, true, story.eyeOpen);
   ctx.save();
   ctx.beginPath();
@@ -240,46 +324,58 @@ function draw() {
   // 远处细密、近处舒展的波纹覆盖整个海面；倒影服从同一波峰的朝向。
   for (const row of waterRows) {
     const d = row.depth;
-    const cell = Math.max(3, width / 180) * (0.6 + d * 1.8);
-    const thickness = (0.65 + Math.pow(d, 1.2) * 5.5) * scale * row.weight;
-    const spread = sunR * (0.58 + d * 0.95);
-    const center = story.sunX + Math.sin(d * 17 - t * 0.45) * spread * d * 0.09;
+    const fineCell = Math.max(3, width / 180) * (.6 + d * 1.5);
+    const coarseCell = Math.max(6, width / 65) * (.6 + d * 1.5);
+    const thickness = (.45 + Math.pow(d, 1.2) * 3.4) * scale * row.weight;
+    const spread = sunR * (.7 + Math.pow(d, .8) * 1.2) * (1 + story.light.elevation * .5) * (.88 + .12 * Math.sin(d * 39 - t * .23));
+    const center = story.sunX + (Math.sin(d * 12 - t * .35) * .09 + Math.sin(d * 27 + t * .21) * .035) * spread * d;
     let left = waveAt(0, row, t, scale);
-    for (let x = 0; x < width; x += cell) {
-      const end = Math.min(width, x + cell);
+    for (let x = 0; x < width;) {
+      const nearReflection = story.reflection > .005 && Math.abs(x - center) < spread * 3.2;
+      const end = Math.min(width, x + (nearReflection ? fineCell : coarseCell));
       const right = waveAt(end, row, t, scale);
-      const facing = (left.facing + right.facing) * 0.5;
-      // 波谷在亮面下方，近处明暗分界更厚、更清楚。
+      const facing = (left.facing + right.facing) * .5;
+      const patch = (left.patch + right.patch) * .5;
+      // 降低长条波谷的对比，避免整片海面呈现等距横线。
       waterFacet(ctx, x, left.y + thickness * 0.45, end, right.y + thickness * 0.45,
-        thickness, rgba(17, 30, 43, (0.12 + d * 0.22) * (0.75 - facing * 0.25)));
+        thickness, rgba(17, 30, 43, (.025 + d * .055) * (.75 - facing * .25) * (.2 + .8 * patch)));
       waterFacet(ctx, x, left.y, end, right.y, thickness * 0.36,
-        rgba(186, 135, 110, 0.07 + Math.max(0, facing) * 0.16));
+        rgba(186, 135, 110, (.015 + Math.max(0, facing) * .05) * patch));
 
       const across = ((x + end) * 0.5 - center) / spread;
-      const coverage = Math.exp(-across * across * 2.1) * story.reflection;
-      // 反光保留暗间隙，局部朝向合适的波峰才露出亮金色。
-      const crest = smoothstep(-0.25, 0.8, facing);
-      const reflection = coverage * (0.08 + crest * 0.83) * (1 - d * 0.2);
-      if (reflection > 0.015) {
-        waterFacet(ctx, x, left.y, end, right.y, thickness * (0.3 + crest * 0.38),
-          rgba(246, Math.round(168 + crest * 44), Math.round(70 + crest * 53), reflection));
-        const glint = smoothstep(0.55, 0.9, facing) * coverage;
-        if (glint > 0.1) {
-          waterFacet(ctx, x, left.y, end, right.y, Math.max(0.4, thickness * 0.16),
-            rgba(255, 228, 160, glint * 0.78));
-        }
-      }
+      const depthLight = 1 - story.light.elevation * .5 * (1 - d);
+      const coverage = (Math.exp(-across * across * 2) * .8 + Math.exp(-across * across * .48) * .2) * story.reflection * depthLight;
+      // 光带外缘柔和扩散，细碎亮点随波峰连续变化，不用硬阈值突然开关。
+      const crest = smoothstep(-.4, .85, facing);
+      const reflection = coverage * (.018 + crest * crest * .7) * (.12 + .88 * patch) * (1 - d * .3);
+      softWaterFacet(ctx, x, left.y, end, right.y, thickness * (.32 + crest * .42),
+        Math.round(crest * 15), reflection);
+      const glint = Math.pow(smoothstep(.25, .88, facing), 3) * coverage * patch;
+      softWaterFacet(ctx, x, left.y, end, right.y, Math.max(.35, thickness * .12),
+        16, glint * .42);
       left = right;
+      x = end;
     }
   }
   ctx.restore();
-  drawWaterContact(ctx, t);
-  drawDusk(ctx, story.darkness);
-  drawStars(ctx, t, story.darkness);
-  drawContrail(ctx, t);
+  drawWaterContact(ctx, actionTime);
+  drawDusk(ctx, story);
+  drawStars(ctx, t, story.darkness, story);
+  drawContrail(ctx, actionTime);
   drawFlight(ctx, story);
+  updateSound(t, story);
 }
 
+
+function soundFrame(time = sceneTime(), story = flightAt(storyTime(time))) {
+  return {time, actionTime: storyTime(time), story, contacts: waterContacts,
+    width, duration: SCENE_DURATION, rate: playback.rate,
+    reducedMotion: motionPreference.matches, running: playback.running && !document.hidden};
+}
+
+function updateSound(time = sceneTime(), story = flightAt(storyTime(time))) {
+  sceneSound.update(soundFrame(time, story));
+}
 
 // 找到回升的座板刚好托住太阳底部的时刻，而不是另做一个爬上去的动作。
 function findPickupTime() {
@@ -296,10 +392,10 @@ function findPickupTime() {
   return (low + high) / 2;
 }
 
-// 一轮 70 秒：秋千浅潜到太阳下方 → 收绳托起 → 负重爬升 → 夜色。
+// 全长 65 秒：秋千浅潜到太阳下方 → 收绳托起 → 负重爬升 → 夜色。
 // 用随时间衰减的摆动近似绳索受风和负重后的反应，保持任意时刻可重绘。
 function flightAt(time) {
-  const t = time % SCENE_DURATION;
+  const t = Math.max(0, Math.min(time, SCENE_DURATION));
   const unit = Math.max(5, Math.min(16, sunR * 0.34));
   const approach = smoothstep(2, 14.5, t);
   const depart = smoothstep(32, 58, t);
@@ -339,149 +435,299 @@ function flightAt(time) {
   const angle = releaseSwing + loadSwing + cruisingSwing;
   const riderX = x - Math.sin(angle) * (length - sunR);
   const riderY = pivotY + Math.cos(angle) * (length - sunR);
-  const reset = smoothstep(65, 69, t);
-  const darkness = (.18 * smoothstep(24, 32, t) + .82 * depart) * (1 - reset);
+  const lightX = t >= pickupTime ? riderX : sunX;
+  const lightY = t >= pickupTime ? riderY : sunY;
+  const light = sunlightAt(lightX, lightY);
+  const darkness = light.darkness;
   return {t, unit, x, y, pitch, pivotY, length, angle, board, deploy, darkness,
     eyeOpen, armOpacity: awake,
     aboard, visible: t >= 2 && t < 62,
-    restOpacity: t < pickupTime ? 1 : (t >= 62 ? reset : 0),
-    sunX: aboard ? riderX : sunX,
-    sunY: aboard ? riderY : sunY,
-    reflection: t < pickupTime ? 1 : (t < 62 ? (1 - depart) * (1 - smoothstep(pickupTime, 26, t) * .45) : reset)
+    restOpacity: t < pickupTime ? 1 : 0,
+    sunX: lightX, sunY: lightY, light,
+    reflection: light.reflection
   };
 }
 
-// 以座板实际穿过水面的时刻触发水花，拖动进度也能重现同一组涟漪。
+// 座板绘制、入水中心和滴水起点共用尺寸与旋转，避免视觉和碰撞各算各的。
+function swingSeatGeometry(radius, deploy) {
+  return {left: -radius * 1.48 * deploy, right: radius * 1.48 * deploy,
+    depth: radius * .25 * deploy, offset: radius * .16 * deploy,
+    thickness: radius * .07 * deploy};
+}
+
+function seatWorldPoint(story, x, y) {
+  return {x: story.x + x * Math.cos(story.angle) - y * Math.sin(story.angle),
+    y: story.pivotY + x * Math.sin(story.angle) + y * Math.cos(story.angle)};
+}
+
+function seatContactPoint(story) {
+  const seat = swingSeatGeometry(sunR, story.deploy);
+  return seatWorldPoint(story, seat.offset / 2, story.length - seat.depth / 2 + seat.thickness);
+}
+
 function findWaterContacts() {
   return [{start: 14, end: 18, entering: true}, {start: 18.35, end: 24, entering: false}].map(event => {
     let low = event.start, high = event.end;
     for (let i = 0; i < 36; i++) {
       const mid = (low + high) / 2;
-      const s = flightAt(mid);
-      const seatY = s.pivotY + Math.cos(s.angle) * s.length;
-      if (event.entering ? seatY < horizonY : seatY > horizonY) low = mid;
+      const point = seatContactPoint(flightAt(mid));
+      if (event.entering ? point.y < horizonY : point.y > horizonY) low = mid;
       else high = mid;
     }
     const time = (low + high) / 2;
-    const s = flightAt(time);
-    return {time, entering: event.entering, x: s.x - Math.sin(s.angle) * s.length};
+    return {time, entering: event.entering, ...seatContactPoint(flightAt(time))};
   });
 }
 
-function drawWaterContact(ctx, time) {
-  const t = time % SCENE_DURATION;
-  const r = sunR;
-  ctx.save();ctx.lineCap = 'round';
-  for (const event of waterContacts) {
-    const age = t - event.time;
-    if (age < 0 || age > 4.5) continue;
-    // 扁平水环由接触点向两侧铺开，留在海面上。
-    ctx.save();ctx.beginPath();ctx.rect(0, horizonY, width, height - horizonY);ctx.clip();
-    for (let i = 0; i < 3; i++) {
-      const u = (age - i * .24) / 3.5;
-      if (u <= 0 || u >= 1) continue;
-      const spread = r * (.95 + u * 3.5);
-      ctx.strokeStyle = rgba(255, 216, 155, Math.sin(Math.PI * u) * (1 - u) * (event.entering ? .55 : .38));
-      ctx.lineWidth = Math.max(.75, r * .027) * (1 - u * .4);
-      ctx.beginPath();ctx.ellipse(event.x, horizonY + r * .035, spread,
-        r * (.03 + u * .24), 0, 0, Math.PI * 2);ctx.stroke();
-    }
-    ctx.restore();
-    if (event.entering) {
-      // 入水的一瞬溅起短小水珠，随后落回水面。
-      for (let i = 0; i < 10; i++) {
-        const life = .55 + (i % 3) * .13;
-        const u = age / life;
-        if (u <= 0 || u >= 1) continue;
-        const side = i % 2 ? -1 : 1;
-        const x = event.x + side * r * (.5 + i * .075 + u * .32);
-        const y = horizonY - Math.sin(Math.PI * u) * r * (.16 + (i % 4) * .075);
-        ctx.fillStyle = rgba(255, 231, 187, Math.sin(Math.PI * u) * .7);
-        ctx.beginPath();ctx.ellipse(x, y, Math.max(.7, r * .018), Math.max(1, r * .04), side * .25, 0, Math.PI * 2);ctx.fill();
-      }
-    } else {
-      // 板边带出的水沿重力方向滴落，座板继续随吊绳上升。
-      for (let i = 0; i < 10; i++) {
-        const emitted = event.time + .12 + i * .14;
-        const elapsed = t - emitted;
-        if (elapsed <= 0 || elapsed > 1.1) continue;
-        const s = flightAt(emitted);
-        const edge = (i % 2 ? -1 : 1) * r * 1.23;
-        const x = s.x + edge * Math.cos(s.angle) - s.length * Math.sin(s.angle);
-        const y = s.pivotY + edge * Math.sin(s.angle) + s.length * Math.cos(s.angle) + height * .17 * elapsed * elapsed;
-        if (y >= horizonY) continue;
-        ctx.fillStyle = rgba(255, 233, 194, .6 * (1 - elapsed / 1.1));
-        ctx.beginPath();ctx.ellipse(x, y, Math.max(.65, r * .016), Math.max(1.2, r * .045), 0, 0, Math.PI * 2);ctx.fill();
-      }
-    }
+function makeWaterDrops() {
+  const exit = waterContacts.find(contact => !contact.entering);
+  if (!exit) return [];
+  return Array.from({length: 10}, (_, i) => {
+    const emitted = exit.time + .12 + i * .16;
+    const story = flightAt(emitted);
+    const seat = swingSeatGeometry(sunR, story.deploy);
+    const edge = (i % 2 ? seat.left : seat.right) * (.78 + (i % 3) * .055);
+    const start = seatWorldPoint(story, edge, story.length + seat.thickness);
+    // 用同一条重力轨迹求落水时刻，声音不在水滴离板时触发。
+    const gravity = height * .34;
+    const fall = Math.sqrt(Math.max(0, 2 * (horizonY - start.y) / gravity));
+    return {id: `drop-${i}`, emitted, time: emitted + fall, x: start.x, y: horizonY,
+      startY: start.y, gravity, strength: .75 + (i % 3) * .1};
+  }).filter(drop => drop.startY < horizonY);
+}
+
+function drawRipple(ctx, event, age, small = false) {
+  const lifetime = small ? .85 : 3.1;
+  const rings = small ? 1 : 3;
+  ctx.save();ctx.beginPath();ctx.rect(0, horizonY, width, height - horizonY);ctx.clip();
+  for (let i = 0; i < rings; i++) {
+    const u = (age - i * .2) / lifetime;
+    if (u <= 0 || u >= 1) continue;
+    const spread = .5 + sunR * (small ? .38 : 3.8) * (1 - Math.pow(1 - u, 1.5));
+    const opacity = smoothstep(0, .06, u) * Math.pow(1 - u, 2) * (small ? .32 : .42);
+    ctx.strokeStyle = rgba(238, 224, 204, opacity);
+    ctx.lineWidth = Math.max(.55, sunR * .018) * (1 - u * .35);
+    ctx.beginPath();ctx.ellipse(event.x, event.y, spread, Math.max(.3, spread * .065), 0, 0, Math.PI * 2);ctx.stroke();
   }
   ctx.restore();
 }
 
-function drawDusk(ctx, darkness) {
-  if (darkness <= 0) return;
-  ctx.save();
-  // 夜色覆盖天空和水纹，太阳本身与秋千在这层之后绘制。
-  const shade = ctx.createLinearGradient(0, 0, 0, height);
-  shade.addColorStop(0, rgba(12, 20, 42, darkness * .9));
-  shade.addColorStop(.76, rgba(29, 26, 43, darkness * .86));
-  shade.addColorStop(.765, rgba(15, 24, 39, darkness * .86));
-  shade.addColorStop(1, rgba(7, 16, 29, darkness * .93));
-  ctx.fillStyle = shade;ctx.fillRect(0, 0, width, height);
+function drawWaterContact(ctx, time) {
+  const r = sunR;
+  ctx.save();ctx.lineCap = 'round';
+  for (const event of waterContacts) {
+    const age = time - event.time;
+    if (age < 0 || age > 3.6) continue;
+    drawRipple(ctx, event, age);
+    if (!event.entering) continue;
+    for (let i = 0; i < 10; i++) {
+      const life = .55 + (i % 3) * .13;
+      const u = age / life;
+      if (u <= 0 || u >= 1) continue;
+      const side = i % 2 ? -1 : 1;
+      const x = event.x + side * r * u * (.8 + i * .055);
+      const y = event.y - Math.sin(Math.PI * u) * r * (.16 + (i % 4) * .075);
+      ctx.fillStyle = rgba(255, 231, 187, Math.sin(Math.PI * u) * .6);
+      ctx.beginPath();ctx.ellipse(x, y, Math.max(.7, r * .018), Math.max(1, r * .04), side * .25, 0, Math.PI * 2);ctx.fill();
+    }
+  }
+  for (const drop of waterDrops) {
+    const elapsed = time - drop.emitted;
+    if (elapsed < 0) continue;
+    if (time >= drop.time) {
+      drawRipple(ctx, drop, time - drop.time, true);
+      continue;
+    }
+    const y = drop.startY + .5 * drop.gravity * elapsed * elapsed;
+    ctx.fillStyle = rgba(255, 233, 210, .58);
+    ctx.beginPath();ctx.ellipse(drop.x, y, Math.max(.65, r * .016), Math.max(1.2, r * .045), 0, 0, Math.PI * 2);ctx.fill();
+  }
   ctx.restore();
 }
 
+function makeSoundEvents() {
+  const events = waterContacts.map((contact, i) => ({...contact, id: `contact-${i}`,
+    type: contact.entering ? 'splash' : 'lift', time: sceneTimeForAction(contact.time), strength: 1}));
+  for (const drop of waterDrops) {
+    const time = sceneTimeForAction(drop.time);
+    const previous = events[events.length - 1];
+    // 邻近滴答共用一个声音，所有小水环仍按各自落点绘制。
+    if (previous.type === 'drop' && time - previous.time < .23) {
+      previous.strength = Math.min(1.15, previous.strength + .15);
+    } else events.push({...drop, time, type: 'drop'});
+  }
+  const bells = [];
+  skyStars.filter(star => star.bright).forEach((star, index) => {
+    for (let cycle = -10; cycle < 5; cycle++) {
+      const time = 48 + (cycle + .12 - star.twinklePhase) * 6.4;
+      if (time < 0 || time > SCENE_DURATION - .75) continue;
+      const story = flightAt(storyTime(time));
+      const light = skyStarAt(star, time, localDarkness(story, star.x * width, star.y * horizonY));
+      if (light.twinkle < .85 || light.visibility < .8) continue;
+      bells.push({id: `star-${index}-${cycle}`, time, x: star.x * width, y: star.y * horizonY,
+        type: 'star', note: index % 3, strength: .85});
+    }
+  });
+  let lastBell = -Infinity;
+  for (const bell of bells.sort((a, b) => a.time - b.time)) {
+    if (bell.time - lastBell < 2.2) continue;
+    events.push(bell);lastBell = bell.time;
+  }
+  return events.sort((a, b) => a.time - b.time);
+}
+
+// 太阳完整留在画面内时仅轻微变暗；圆盘越过右边缘后才完成入夜。
+function sunlightAt(x, y) {
+  const elevation = Math.max(0, (sunY - y) / height);
+  const travel = Math.hypot((x - sunX) / (width * .56),
+    Math.max(0, elevation - .16) / .65);
+  const drift = smoothstep(.12, .98, travel);
+  const leavingFrame = smoothstep(width - sunR, width + sunR * 1.5, x);
+  const darkness = .2 * drift * (1 - leavingFrame) + leavingFrame;
+  return {darkness, elevation,
+    reflection: (1 - darkness) * (1 - .35 * smoothstep(.12, .4, elevation))};
+}
+
+function localDarkness(story, x, y, sea = false) {
+  const d = story.darkness;
+  const dy = sea ? (y - horizonY) / (height - horizonY) : (y - story.sunY) / height;
+  const distance = Math.hypot((x - story.sunX) / (width * .55), dy * .4);
+  const far = smoothstep(.1, 1.25, distance);
+  return Math.max(0, Math.min(1, d + d * (1 - d) * (far - .45) * 1.1));
+}
+
+function drawSunlight(ctx, story) {
+  const intensity = 1 - story.darkness;
+  if (intensity <= 0) return;
+  const glow = (x, y, rx, ry, sea, alpha) => {
+    ctx.save();ctx.beginPath();ctx.rect(0, sea ? horizonY : 0, width, sea ? height - horizonY : horizonY);ctx.clip();
+    ctx.translate(x, y);ctx.scale(rx, ry);
+    const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    gradient.addColorStop(0, rgba(255, 175, 100, alpha * intensity));
+    gradient.addColorStop(.45, rgba(255, 175, 100, alpha * intensity * .45));
+    gradient.addColorStop(1, 'rgba(255,175,100,0)');
+    ctx.fillStyle = gradient;ctx.fillRect(-1, -1, 2, 2);ctx.restore();
+  };
+  glow(story.sunX, story.sunY, width * .7, height * .52, false, .12);
+  glow(story.sunX, horizonY + (height - horizonY) * Math.min(.65, story.light.elevation),
+    width * .72, (height - horizonY) * .85, true, .16);
+}
+
+function drawDusk(ctx, story) {
+  if (story.darkness <= 0) return;
+  // 横向连续渐变：背离太阳的一边先暗，附近仍留暖光；海面同步跟随。
+  ctx.save();
+  for (const sea of [false, true]) {
+    const gradient = ctx.createLinearGradient(0, 0, width, 0);
+    const y = sea ? horizonY : story.sunY;
+    for (let i = 0; i <= 24; i++) {
+      const d = localDarkness(story, width * i / 24, y, sea);
+      gradient.addColorStop(i / 24, sea ? rgba(9, 19, 32, d * .95) : rgba(9, 17, 35, d * .98));
+    }
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, sea ? horizonY : 0, width, sea ? height - horizonY : horizonY);
+  }
+  ctx.restore();
+}
+
+// 大量微弱远星铺底，宽星带内有局部聚集和暗隙；固定种子保证拖动可复现。
+function makeSkyStars() {
+  const random = seededRandom(731029);
+  const stars = [];
+  const count = Math.round(Math.max(700, Math.min(3600, width * horizonY / 460)));
+  const clusters = Array.from({length: 7}, (_, i) => ({
+    x: .06 + i * .145, y: .73 - i * .079 + (random() - .5) * .14,
+    sx: .035 + random() * .045, sy: .035 + random() * .05
+  }));
+  const gaussian = () => Math.sqrt(-2 * Math.log(Math.max(.00001, random()))) * Math.cos(random() * Math.PI * 2);
+  for (let i = 0; i < count; i++) {
+    let x, y;
+    const layer = random();
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (layer < .43) {
+        x = random();y = random() * .97;
+      } else if (layer < .77) {
+        x = random();
+        y = .78 - x * .52 + Math.sin(x * 8) * .055 + gaussian() * .10;
+      } else {
+        const group = clusters[Math.floor(random() * clusters.length)];
+        x = group.x + gaussian() * group.sx;y = group.y + gaussian() * group.sy;
+      }
+      if (x > .006 && x < .994 && y > .012 && y < .97) break;
+    }
+    if (!(x > 0 && x < 1 && y > 0 && y < 1)) continue;
+    const seed = random();
+    const rank = random();
+    const medium = rank > .92;
+    stars.push({x, y, seed, bright: false, medium,
+      dust: layer >= .43 && !medium, twinkling: false});
+  }
+  // 少量主星横跨全幅，纵向自由错落，不形成网格，也不集中在一侧。
+  const brightCount = Math.round(Math.max(9, Math.min(18, width / 100)));
+  for (let i = 0; i < brightCount; i++) {
+    stars.push({x: (i + .2 + random() * .6) / brightCount,
+      y: .07 + random() * .76, seed: random(), bright: true,
+      medium: false, dust: false, twinkling: true, twinklePhase: (i + random() * .35) / brightCount});
+  }
+  return stars;
+}
+
 function skyStarAt(star, time, darkness) {
-  // 暮色先显露微弱星点，亮星和光芒留到夜色更深时渐入。
-  const visibility = smoothstep(star.bright ? .78 + star.seed * .06 : .34 + star.seed * .14,
-    star.bright ? .98 : .82 + star.seed * .15, darkness);
-  const sparkleVisibility = smoothstep(.84, 1, darkness);
-  const period = 3.6 + star.seed * 2.4;
-  const phase = ((time + star.seed * period) % period + period) % period;
+  const visibility = smoothstep(star.bright ? .8 + star.seed * .04 : .36 + star.seed * .22,
+    star.bright ? .98 : .86 + star.seed * .12, darkness);
+  const sparkleVisibility = smoothstep(.82, .98, darkness);
+  const period = 6.4;
+  const phase = (((time - 48) / period + (star.twinklePhase ?? star.seed)) % 1 + 1) % 1;
   const twinkle = star.twinkling && !motionPreference.matches
-    ? sparkleVisibility * smoothstep(0, .45, phase) * (1 - smoothstep(.45, 1.3, phase)) : 0;
-  const restingAlpha = (star.bright ? .92 : .3 + star.seed * .25) * (star.twinkling ? .6 : 1);
-  const restingRadius = star.bright ? 1.35 + star.seed * .45 : .55 + star.seed * .5;
+    ? sparkleVisibility * smoothstep(0, .12, phase) * (1 - smoothstep(.12, .37, phase))
+      * (1 - smoothstep(SCENE_DURATION - .8, SCENE_DURATION, time)) : 0;
+  const restingAlpha = star.bright ? .65 : star.medium ? .42 + star.seed * .22
+    : star.dust ? .13 + star.seed * .19 : .22 + star.seed * .23;
+  const restingRadius = star.bright ? 1.05 + star.seed * .25 : star.medium ? .65 + star.seed * .2
+    : .24 + star.seed * .3;
   return {
     visibility, twinkle,
-    alpha: visibility * (restingAlpha + (.98 - restingAlpha) * twinkle),
-    radius: restingRadius + (2.2 + star.seed * .4 - restingRadius) * twinkle
+    alpha: visibility * (restingAlpha + (1 - restingAlpha) * twinkle) * (1 - star.y * .22),
+    radius: restingRadius + .48 * twinkle
   };
 }
 
-function drawStars(ctx, time, darkness) {
-  if (darkness <= .34) return;
-  const scale = Math.max(.65, Math.min(1.35, Math.min(width / 1100, height / 850)));
+function drawStars(ctx, time, darkness, story) {
+  if (darkness <= .36) return;
+  const scale = Math.max(.8, Math.min(1.25, Math.min(width / 1100, height / 850)));
   ctx.save();ctx.beginPath();ctx.rect(0, 0, width, horizonY);ctx.clip();
   for (const star of skyStars) {
-    const light = skyStarAt(star, time, darkness);
+    const light = skyStarAt(star, time, story ? localDarkness(story, star.x * width, star.y * horizonY) : darkness);
     if (light.alpha < .002) continue;
-    const x = star.x * width;
-    const y = (.04 + star.y * .86) * horizonY;
+    const x = star.x * width, y = star.y * horizonY;
+    // 远星保持细小，依靠数量与密度形成星带，不给每颗远星加光晕。
+    if (!star.bright) {
+      ctx.globalAlpha = light.alpha;ctx.fillStyle = '#ffffff';
+      ctx.beginPath();ctx.arc(x, y, light.radius * scale, 0, Math.PI * 2);ctx.fill();
+      continue;
+    }
     ctx.save();ctx.translate(x, y);ctx.scale(scale, scale);
-    // 从枫叶版的 drawGlint 沿用小光核与逐渐收细的横竖光芒。
-    if (light.twinkle > .001) {
-      ctx.save();ctx.globalAlpha = light.visibility * light.twinkle;
-      const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 4.5);
-      halo.addColorStop(0, 'rgba(255,250,223,.8)');
-      halo.addColorStop(.25, 'rgba(255,230,161,.22)');
-      halo.addColorStop(1, 'rgba(255,219,133,0)');
-      ctx.fillStyle = halo;ctx.beginPath();ctx.arc(0, 0, 4.5, 0, Math.PI * 2);ctx.fill();
-      const reach = 22 * (.5 + .5 * light.twinkle);
+    const radius = 4 + light.twinkle * 5;
+    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
+    halo.addColorStop(0, 'rgba(255,255,255,.55)');
+    halo.addColorStop(.22, 'rgba(255,255,255,.16)');
+    halo.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.globalAlpha = light.alpha;
+    ctx.fillStyle = halo;ctx.beginPath();ctx.arc(0, 0, radius, 0, Math.PI * 2);ctx.fill();
+    if (light.twinkle > .015) {
+      ctx.globalAlpha = light.visibility * light.twinkle * .8;
+      const reach = 5 + light.twinkle * 12;
       for (const angle of [0, Math.PI / 2]) {
         ctx.save();ctx.rotate(angle);
         const ray = ctx.createLinearGradient(-reach, 0, reach, 0);
-        for (const [stop, color] of [[0,'rgba(255,220,110,0)'],[.4,'rgba(255,241,185,.65)'],
-          [.5,'#fffdf0'],[.6,'rgba(255,241,185,.65)'],[1,'rgba(255,220,110,0)']]) ray.addColorStop(stop, color);
+        ray.addColorStop(0, 'rgba(255,255,255,0)');
+        ray.addColorStop(.5, '#ffffff');ray.addColorStop(1, 'rgba(255,255,255,0)');
         ctx.strokeStyle = ray;ctx.lineWidth = .65;
         ctx.beginPath();ctx.moveTo(-reach, 0);ctx.lineTo(reach, 0);ctx.stroke();ctx.restore();
       }
-      ctx.restore();
     }
-    ctx.globalAlpha = light.alpha;
-    ctx.fillStyle = star.warm ? '#fff0d1' : '#eef3ff';
-    ctx.beginPath();ctx.arc(0, 0, light.radius, 0, Math.PI * 2);ctx.fill();
-    ctx.restore();
+    ctx.globalAlpha = light.alpha;ctx.fillStyle = '#ffffff';
+    ctx.beginPath();ctx.arc(0, 0, light.radius, 0, Math.PI * 2);ctx.fill();ctx.restore();
   }
   ctx.restore();
 }
@@ -542,8 +788,8 @@ function drawAirplane(ctx, unit) {
 // 从飞机经过的历史位置绘制尾流，旧段逐渐变宽、漂移和消散。
 // 不累积帧缓存，循环、缩放与减少动态效果设置都能得到一致的画面。
 function contrailSegments(time) {
-  const t = time % SCENE_DURATION;
-  const fade = 1 - smoothstep(65, 70, t);
+  const t = Math.max(0, Math.min(time, SCENE_DURATION));
+  const fade = 1 - smoothstep(59, 64, t);
   const segments = [];
   const start = Math.max(2, t - 12);
   const end = Math.min(t, 61);
@@ -646,12 +892,8 @@ function drawReelingRope(ctx, story, side) {
   ctx.restore();
 }
 
-function drawSwingSeat(ctx, halfWidth, y, radius, deploy) {
-  const left = -halfWidth - radius * .06 * deploy;
-  const right = halfWidth + radius * .06 * deploy;
-  const depth = radius * .25 * deploy;
-  const offset = radius * .16 * deploy;
-  const thickness = radius * .07 * deploy;
+function drawSwingSeat(ctx, y, radius, deploy) {
+  const {left, right, depth, offset, thickness} = swingSeatGeometry(radius, deploy);
   ctx.save();
   ctx.strokeStyle = '#ffffff';ctx.lineWidth = Math.max(.85, radius * .025);
   ctx.lineJoin = 'round';
@@ -702,7 +944,6 @@ function drawFlight(ctx, story) {
   ctx.beginPath();ctx.rect(0, 0, width, horizonY);ctx.clip();
   ctx.translate(story.x, story.pivotY);ctx.rotate(story.angle);
   ctx.strokeStyle = '#ffffff';ctx.lineWidth = Math.max(0.9, r * .024);ctx.lineCap = 'round';
-  const halfSeat = r * 1.42 * story.deploy;
   if (story.deploy > 0) {
     for (const side of [-1, 1]) {
       const rope = ropeAt(story, side, story.length);
@@ -710,7 +951,7 @@ function drawFlight(ctx, story) {
       ctx.lineTo(rope.guide.x, rope.guide.y);ctx.lineTo(rope.bottomX, story.length);ctx.stroke();
       drawReelingRope(ctx, story, side);
     }
-    drawSwingSeat(ctx, halfSeat, story.length, r, story.deploy);
+    drawSwingSeat(ctx, story.length, r, story.deploy);
   }
   ctx.restore();
 
