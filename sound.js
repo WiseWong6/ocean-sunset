@@ -1,7 +1,9 @@
 // 真实海浪通过本地媒体元素播放；短音效共用画面的事件表，在音频时钟上提前安排。
 // 不把 file:// 媒体接到 Web Audio，避免本地文件的跨域限制造成海浪静音。
+const SCENE_AUDIO_LEVELS = {master: .7, sea: .27, plane: 1.3, splash: .42, lift: .25, drop: .085, star: .085};
+
 function createEffectSamples(type, sampleRate, note = 0) {
-  const duration = type === 'star' ? .7 : type === 'drop' ? .22 : type === 'lift' ? .42 : .8;
+  const duration = type === 'star' ? .7 : type === 'drop' ? .14 : type === 'lift' ? .42 : .8;
   const data = new Float32Array(Math.ceil(duration * sampleRate));
   let seed = 871 + note, filtered = 0, phase = 0, peak = 0;
   for (let i = 0; i < data.length; i++) {
@@ -14,8 +16,11 @@ function createEffectSamples(type, sampleRate, note = 0) {
       value = (Math.sin(t * frequency * Math.PI * 2) + .13 * Math.sin(t * frequency * 4.01 * Math.PI))
         * (1 - Math.exp(-t / .014)) * Math.exp(-t / .15);
     } else if (type === 'drop') {
-      phase += (620 + 1050 * Math.exp(-t / .035)) * Math.PI * 2 / sampleRate;
-      value = (Math.sin(phase) + noise * .055) * (1 - Math.exp(-t / .003)) * Math.exp(-t / .037);
+      // 短促的水面碎响，加极弱的低频气泡；不使用听起来像电子提示音的高音滑音。
+      filtered += (1 - Math.exp(-Math.PI * 2 * 1900 / sampleRate)) * (noise - filtered);
+      phase += 340 * Math.PI * 2 / sampleRate;
+      value = (filtered * .85 + Math.sin(phase) * .065 * Math.exp(-t / .008))
+        * (1 - Math.exp(-t / .0018)) * Math.exp(-t / .018);
     } else {
       const cutoff = type === 'lift' ? 1200 : 2100 - 1400 * t / duration;
       const coefficient = 1 - Math.exp(-Math.PI * 2 * cutoff / sampleRate);
@@ -27,6 +32,30 @@ function createEffectSamples(type, sampleRate, note = 0) {
   }
   for (let i = 0; i < data.length; i++) data[i] *= .85 / peak;
   return data;
+}
+
+function continuousSoundAt(frame) {
+  const {actionTime: t, story, contacts, width} = frame;
+  const smooth = (a, b, x) => {const u = Math.max(0, Math.min(1, (x - a) / (b - a)));return u * u * (3 - 2 * u);};
+  const reeling = smooth(18.35, 18.7, t) * (1 - smooth(23.5, 24, t));
+  const u = Math.max(0, Math.min(1, (t - 18.35) / 5.65));
+  const reelSpeed = 4 * u * (1 - u);
+  const contactFocus = contacts.reduce((amount, contact) => Math.max(amount,
+    smooth(contact.time - .12, contact.time, t) * (1 - smooth(contact.time + .25, contact.time + .8, t))), 0);
+  const engineRoom = 1 - contactFocus * .35;
+  const plane = story.visible ? Math.exp(-Math.pow((story.x / width - .5) * 1.7, 2))
+    * smooth(2, 3.5, t) * (1 - smooth(56, 62, t)) : 0;
+  const strain = story.strain || 0;
+  return {
+    engine: plane * (.024 + .047 * strain) * engineRoom * SCENE_AUDIO_LEVELS.plane,
+    harmonic: plane * (.008 + .025 * strain) * engineRoom * SCENE_AUDIO_LEVELS.plane,
+    wind: plane * (.014 + .15 * strain) * engineRoom * SCENE_AUDIO_LEVELS.plane,
+    engineFrequency: 84 - strain * 23,
+    engineCutoff: 320 + strain * 450,
+    rope: reeling * (.08 + .06 * reelSpeed),
+    winch: reeling * (.014 + .016 * reelSpeed),
+    winchFrequency: 135 + 65 * reelSpeed
+  };
 }
 
 class SceneSound {
@@ -79,12 +108,14 @@ class SceneSound {
       return {oscillator, gain};
     };
     this.planePan = c.createStereoPanner();this.planePan.connect(this.master);
-    const engineFilter = c.createBiquadFilter();engineFilter.type = 'lowpass';engineFilter.frequency.value = 240;
+    const engineFilter = this.engineFilter = c.createBiquadFilter();engineFilter.type = 'lowpass';engineFilter.frequency.value = 320;
     engineFilter.connect(this.planePan);
     this.engine = makeTone(78, 'triangle', engineFilter);
     this.harmonic = makeTone(156, 'sine', engineFilter);
     this.wind = makeNoise(380, this.planePan);
-    this.rope = makeNoise(1000, this.master);
+    this.winchPan = c.createStereoPanner();this.winchPan.connect(this.master);
+    this.rope = makeNoise(1300, this.winchPan);
+    this.winch = makeTone(170, 'triangle', this.winchPan);
     source.start();
     this.buffers = {};
     for (const type of ['splash', 'lift', 'drop', 'star']) {
@@ -164,8 +195,7 @@ class SceneSound {
     const source = c.createBufferSource();
     source.buffer = this.buffers[`${event.type}-${event.note || 0}`];
     const gain = c.createGain();
-    const levels = {splash: .42, lift: .25, drop: .17, star: .085};
-    gain.gain.value = levels[event.type] * event.strength;
+    gain.gain.value = SCENE_AUDIO_LEVELS[event.type] * event.strength;
     const pan = c.createStereoPanner();pan.pan.value = Math.max(-.8, Math.min(.8, event.x / width * 2 - 1));
     source.connect(gain);gain.connect(pan);pan.connect(this.master);
     const voice = {source, gain, pan};this.voices.add(voice);
@@ -224,12 +254,12 @@ class SceneSound {
     this.lastMix = now;
     const smooth = (a, b, x) => {const u = Math.max(0, Math.min(1, (x - a) / (b - a)));return u * u * (3 - 2 * u);};
     const fade = smooth(0, .5, time) * (1 - smooth(duration - .8, duration, time));
-    this.set(this.master.gain, .7 * fade, .025);
+    this.set(this.master.gain, SCENE_AUDIO_LEVELS.master * fade, .025);
     if (this.sea.readyState >= 1 && (this.seaNeedsSync || Math.abs(this.sea.currentTime - time) > .4 * rate)) {
       this.sea.currentTime = time;this.seaNeedsSync = false;
     }
     this.sea.playbackRate = rate;this.sea.preservesPitch = true;
-    this.sea.volume = .72 * fade;
+    this.sea.volume = SCENE_AUDIO_LEVELS.sea * fade;
     if (this.sea.paused && !this.seaStarting) {
       this.seaStarting = true;
       this.sea.play().then(() => {
@@ -241,21 +271,21 @@ class SceneSound {
         this.fail(error);
       });
     }
-    const reeling = smooth(18.35, 18.7, t) * (1 - smooth(23.5, 24, t));
-    const contactFocus = contacts.reduce((amount, contact) => Math.max(amount,
-      smooth(contact.time - .15, contact.time, t) * (1 - smooth(contact.time + 1, contact.time + 2.8, t))), 0);
-    const engineRoom = 1 - Math.max(contactFocus * .72, reeling * .55);
-    const plane = story.visible ? Math.exp(-Math.pow((story.x / width - .5) * 1.7, 2))
-      * smooth(2, 3.5, t) * (1 - smooth(56, 62, t)) : 0;
-    const load = smooth(24.5, 25.5, t) * (1 - smooth(26, 30, t));
-    this.set(this.planePan.pan, Math.max(-1, Math.min(1, story.x / width * 2 - 1)));
-    this.set(this.engine.oscillator.frequency, 78 - load * 9, .2);
-    this.set(this.harmonic.oscillator.frequency, 156 - load * 18, .2);
-    this.set(this.engine.gain.gain, plane * .007 * engineRoom);
-    this.set(this.harmonic.gain.gain, plane * .002 * engineRoom);
-    this.set(this.wind.gain.gain, plane * .01 * engineRoom);
-    this.set(this.rope.gain.gain, reeling * .035);
+    const mix = continuousSoundAt(frame);
+    const pan = Math.max(-1, Math.min(1, story.x / width * 2 - 1));
+    this.set(this.planePan.pan, pan);
+    this.set(this.winchPan.pan, pan * .8);
+    // 转速因负重下沉，低频和粗糙的进气声同步加重；随飞机恢复姿态自然减弱。
+    this.set(this.engine.oscillator.frequency, mix.engineFrequency, .12);
+    this.set(this.harmonic.oscillator.frequency, mix.engineFrequency * 2, .12);
+    this.set(this.engineFilter.frequency, mix.engineCutoff, .12);
+    this.set(this.engine.gain.gain, mix.engine);
+    this.set(this.harmonic.gain.gain, mix.harmonic);
+    this.set(this.wind.gain.gain, mix.wind);
+    this.set(this.rope.gain.gain, mix.rope);
+    this.set(this.winch.gain.gain, mix.winch);
+    this.set(this.winch.oscillator.frequency, mix.winchFrequency, .1);
   }
 }
 
-if (typeof module !== 'undefined') module.exports = {SceneSound, createEffectSamples};
+if (typeof module !== 'undefined') module.exports = {SceneSound, createEffectSamples, continuousSoundAt, SCENE_AUDIO_LEVELS};

@@ -5,19 +5,34 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>海面上的夕阳 · 3:4 竖版</title>
   <style>
-    html, body { margin: 0; padding: 0; overflow: hidden; background: #f69b18; }
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #145bee; }
     canvas { display: block; }
     .playback {
       position: fixed; z-index: 2; left: 50%; bottom: max(16px, env(safe-area-inset-bottom));
       transform: translateX(-50%); box-sizing: border-box;
-      width: min(640px, calc(100% - 28px)); display: flex; align-items: center; gap: 14px;
+      width: min(760px, calc(100% - 28px)); display: flex; align-items: center; gap: 10px;
       padding: 10px 14px; border: 1px solid #ffffff26; border-radius: 14px;
       background: #15202bc9; backdrop-filter: blur(12px); color: #fff5e5;
-      font: 13px/1.4 system-ui, sans-serif;
+      font: 13px/1.4 system-ui, sans-serif; transition: opacity .18s ease;
     }
+    .playback.is-hidden { opacity: 0; pointer-events: none; }
+    @media (prefers-reduced-motion: reduce) { .playback { transition: none; } }
     .playback button { flex: 0 0 54px; padding: 7px 0; border: 0; border-radius: 7px;
       background: #ffffff18; color: inherit; font: inherit; cursor: pointer; }
     .playback button:hover { background: #ffffff2b; }
+    .style-picker { position: relative; flex: 0 0 68px; width: 68px; }
+    .playback #play-style { width: 100%; padding: 7px 5px; }
+    #play-style::after { content: '⌄'; margin-left: 7px; }
+    .style-menu { position: absolute; bottom: calc(100% + 8px); right: 0;
+      min-width: 104px; padding: 5px; border: 1px solid #60748c; border-radius: 9px;
+      background: #1c2d43; box-shadow: 0 6px 20px #0005; }
+    .style-menu[hidden] { display: none; }
+    .playback .style-menu button { display: block; width: 100%; padding: 8px 10px;
+      text-align: left; background: transparent; color: #f6f8fc; white-space: nowrap; }
+    .playback .style-menu button:hover, .playback .style-menu button:focus-visible {
+      background: #354d69; }
+    .playback .style-menu button[aria-checked="true"] { background: #354d69; }
+    .style-menu button[aria-checked="true"]::after { content: '✓'; float: right; margin-left: 12px; }
     .playback input { --progress: 0%; flex: 1; min-width: 0; margin: 0; height: 26px;
       appearance: none; -webkit-appearance: none; background: transparent; cursor: pointer; }
     .playback input::-webkit-slider-runnable-track { height: 4px; border-radius: 4px;
@@ -34,33 +49,49 @@
     .version-switch a { color: inherit; font: inherit; text-decoration: none;
       padding: 6px 8px; border-radius: 6px; white-space: nowrap; }
     .version-switch a[aria-current="page"] { background: #ffffff26; }
-    @media (max-width: 580px) {
-      .playback { flex-wrap: wrap; column-gap: 10px; row-gap: 5px; }
-      .playback input { flex: 1 1 calc(100% - 80px); }
-      .version-switch { margin-left: auto; }
+    @media (max-width: 720px) {
+      .playback { display: grid; grid-template-columns: 54px minmax(0, 1fr) 68px auto;
+        column-gap: 10px; row-gap: 7px; }
+      #play-toggle { grid-area: 1 / 1; }
+      #play-progress { grid-area: 1 / 2 / 2 / 4; width: 100%; }
+      #play-time { grid-area: 1 / 4; justify-self: end; }
+      #play-speed { grid-area: 2 / 1; }
+      #play-sound { grid-area: 2 / 2; width: 54px; justify-self: start; }
+      .style-picker { grid-area: 2 / 3; }
+      .version-switch { grid-area: 2 / 4; justify-self: end; }
     }
     #play-speed { flex-basis: 44px; }
     body[data-aspect="3:4"] { background: #0c101b; }
     body[data-aspect="3:4"] canvas { position: fixed; left: 50%; top: calc(50% - 43px);
       transform: translate(-50%, -50%); }
-    @media (max-width: 580px) {
+    @media (max-width: 720px) {
       body[data-aspect="3:4"] canvas { top: calc(50% - 63px); }
     }
     @media (max-width: 420px) {
-      .playback { gap: 7px; padding: 8px; }
-      .playback button { flex-basis: 42px; }
-      #play-speed { flex-basis: 38px; }
+      .playback { grid-template-columns: 42px minmax(0, 1fr) 60px auto; gap: 7px; padding: 8px; }
+      .playback button { min-width: 0; }
+      #play-sound { width: 42px; }
+      .style-picker { width: 60px; }
+      .version-switch a { padding: 6px; }
       .playback output { font-size: 10px; }
     }
   </style>
 </head>
 <body data-aspect="3:4">
-  <div class="playback" role="group" aria-label="动画播放控制">
+  <div id="play-controls" class="playback" role="group" aria-label="动画播放控制">
     <button id="play-toggle" type="button" disabled>播放</button>
     <input id="play-progress" type="range" min="0" max="65" step="0.05" value="0"
       aria-label="动画进度" disabled>
     <button id="play-speed" type="button" aria-label="播放速度 1 倍，点击切换" title="切换倍速：0.5 / 1 / 1.5 / 2 / 3" disabled>1×</button>
     <button id="play-sound" type="button" aria-label="开启音效" aria-pressed="false" title="开启海浪、飞机、落水、滴水与星光音效；录音署名见页面源文件" disabled>声音关</button>
+    <div class="style-picker" id="style-picker">
+      <button id="play-style" type="button" value="blue" aria-label="画面风格"
+        aria-haspopup="menu" aria-expanded="false" aria-controls="play-style-menu" disabled>蓝橙</button>
+      <div id="play-style-menu" class="style-menu" role="menu" aria-label="画面风格" hidden>
+        <button type="button" role="menuitemradio" data-style="blue" aria-checked="true" tabindex="-1">蓝橙</button>
+        <button type="button" role="menuitemradio" data-style="warm" aria-checked="false" tabindex="-1">暖色</button>
+      </div>
+    </div>
     <nav class="version-switch" aria-label="画面比例">
       <a href="index.html">全屏</a>
       <a href="portrait.html" aria-current="page">3:4</a>

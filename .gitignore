@@ -1,2 +1,10 @@
 .DS_Store
 .playwright-cli/
+
+# 本地视觉检查和大型视频保留在工作区
+output/*
+!output/minitool-warm/
+!output/warm-4k-28s/
+output/warm-4k-28s/*
+!output/warm-4k-28s/export.cjs
+!output/warm-4k-28s/README.md
