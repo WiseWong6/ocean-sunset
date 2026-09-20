@@ -280,15 +280,8 @@ function updatePlaybackControls(force = true) {
   if (!draggingProgress) progressInput.value = t;
   progressInput.style.setProperty('--progress', `${t / SCENE_DURATION * 100}%`);
   progressInput.setAttribute('aria-valuetext', `${clockText(t)}，共 ${clockText(SCENE_DURATION)}`);
-  // 显示当前倍速下的等效播放用时，进度条仍使用剧情时间。
-  const rateClockText = value => {
-    const tenths = Math.round(value * 10);
-    const minutes = Math.floor(tenths / 600);
-    const seconds = Math.floor(tenths % 600 / 10);
-    const fraction = tenths % 10;
-    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}${fraction ? `.${fraction}` : ''}`;
-  };
-  timeOutput.textContent = `${rateClockText(t / playback.rate)} / ${rateClockText(SCENE_DURATION / playback.rate)}`;
+  // 显示当前倍速下的等效播放用时，进度条仍使用剧情时间；只精确到秒。
+  timeOutput.textContent = `${clockText(t / playback.rate)} / ${clockText(SCENE_DURATION / playback.rate)}`;
 }
 
 // 竖版缩短两段横向飞行，入水、托举和负重动作仍保持原来的时长。
@@ -348,9 +341,10 @@ function rgba(r, g, b, alpha) {
 }
 
 function buildScene() {
+  // 太阳放大 1.2 倍：主体更醒目，海面倒影路更宽；海平面维持原位。
   horizonY = Math.round(height * 0.76);
   sunX = width * 0.5;
-  sunR = Math.min(width * 0.038, height * 0.045);
+  sunR = Math.min(width * 0.0456, height * 0.054);
   sunY = horizonY - sunR * 0.76;
   pickupTime = findPickupTime();
   waterContacts = findWaterContacts();
@@ -665,7 +659,7 @@ function findPickupTime() {
 // 用随时间衰减的摆动近似绳索受风和负重后的反应，保持任意时刻可重绘。
 function flightAt(time) {
   const t = Math.max(0, Math.min(time, SCENE_DURATION));
-  const unit = Math.max(5, Math.min(16, sunR * 0.34));
+  const unit = Math.max(5, Math.min(24, sunR * 0.34));
   // 飞机到画框边缘时已经在飞行，进入后再逐渐减速靠近太阳。
   const approachTime = Math.max(0, Math.min(1, (t - 2) / 12.5));
   const approach = 1 - (1 - approachTime) ** 2;
@@ -753,8 +747,9 @@ function sunLegAt(story, side) {
 // 座板绘制、入水中心和滴水起点共用尺寸与旋转，避免视觉和碰撞各算各的。
 function swingSeatGeometry(radius, deploy) {
   // 板面的透视中心与太阳对齐，两侧绳端不再随透视一起偏右。
-  return {left: -radius * 1.56 * deploy, right: radius * 1.40 * deploy,
-    depth: radius * .25 * deploy, offset: radius * .16 * deploy,
+  // 太阳放大后座板加宽约 1.2 倍：绳线外扩，握点才能离身体足够远、手臂不显短。
+  return {left: -radius * 1.9 * deploy, right: radius * 1.7 * deploy,
+    depth: radius * .25 * deploy, offset: radius * .2 * deploy,
     thickness: radius * .07 * deploy};
 }
 

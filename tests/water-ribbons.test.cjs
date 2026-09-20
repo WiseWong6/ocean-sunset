@@ -28,8 +28,8 @@ function renderer(style = 'blue', aspect = '') {
   vm.runInContext(source, box, {filename: 'sketch.js'});
   const read = expression => vm.runInContext(expression, box);
   read(`sceneStyle = '${style}';palette = SCENE_STYLES[sceneStyle];
-    horizonY = Math.round(height * .76);sunX = width * .5;
-    sunR = Math.min(width * .038, height * .045);sunY = horizonY - sunR * .76;
+    horizonY = Math.round(height*.76);sunX = width * .5;
+    sunR = Math.min(width*.0456,height*.054);sunY = horizonY - sunR * .76;
     pickupTime = findPickupTime();waterContacts = findWaterContacts();sunExitTime = findSunExitTime();
     {const next = seededRandom(860214);waterRows = Array.from({length:72},(_,i)=>({
       depth:Math.pow((i+.15+next()*.7)/72,1.7),phase:next()*Math.PI*2,weight:.65+next()*.7}));}`);
@@ -124,7 +124,7 @@ test('受光场保留72行，播放、换色和调整尺寸都复用一次分配
     const field = f.render(5);
     assert.equal(field.style, style);
   }
-  f.read('width = 675;height = 900;horizonY = Math.round(height*.76);sunR = Math.min(width*.038,height*.045)');
+  f.read('width = 675;height = 900;horizonY = Math.round(height*.76);sunR = Math.min(width*.0456,height*.054)');
   const resized = f.render(5);
   assert.equal(resized.width, 675);assert.equal(resized.radius, f.read('sunR'));
   [resized.canvas, resized.image, resized.alpha, resized.depth, resized.rowAt, resized.rowMix, resized.color]

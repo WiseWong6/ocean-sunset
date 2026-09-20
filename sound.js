@@ -1,6 +1,7 @@
 // 真实海浪通过本地媒体元素播放；短音效共用画面的事件表，在音频时钟上提前安排。
 // 不把 file:// 媒体接到 Web Audio，避免本地文件的跨域限制造成海浪静音。
-const SCENE_AUDIO_LEVELS = {master: .7, sea: .27, plane: 1.3, splash: .42, lift: .25, drop: .085, star: .085};
+// 飞机略增、海浪略减、落水再收一档：巡航引擎浮在海浪床之上，落水不抢戏。
+const SCENE_AUDIO_LEVELS = {master: .7, sea: .24, plane: 1.45, splash: .32, lift: .25, drop: .085, star: .085};
 
 function createEffectSamples(type, sampleRate, note = 0) {
   const duration = type === 'star' ? .7 : type === 'drop' ? .14 : type === 'lift' ? .42 : .8;

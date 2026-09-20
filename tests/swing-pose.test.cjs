@@ -9,7 +9,7 @@ function scene(width = 1920, height = 1080, aspect = '') {
     document: {body: {dataset: {aspect}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../sketch.js'), 'utf8'), box);
   const read = code => vm.runInContext(code, box);
-  read(`horizonY=Math.round(height*.76);sunR=Math.min(width*.038,height*.045);
+  read(`horizonY=Math.round(height*.76);sunR=Math.min(width*.0456,height*.054);
     sunX=width*.5;sunY=horizonY-sunR*.76;pickupTime=findPickupTime();waterContacts=findWaterContacts()`);
   return {box, read};
 }

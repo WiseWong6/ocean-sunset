@@ -20,15 +20,15 @@ const strained = continuousSoundAt({actionTime: 25.6, width: 1000, contacts: [],
 const planeRmsBound = mix => levels.master * (mix.engine / Math.sqrt(3) + mix.harmonic / Math.sqrt(2) + mix.wind * .37);
 const planeUpperRms = planeRmsBound(cruise);
 const seaRms = rms(sea) * levels.sea;
-assert.ok(db(seaRms / planeUpperRms) > -8 && db(seaRms / planeUpperRms) < -3,
-  '降低海浪、提高飞机后，巡航各分量上界应比海浪高3至8分贝');
+assert.ok(db(seaRms / planeUpperRms) > -10 && db(seaRms / planeUpperRms) < -4,
+  '再次降低海浪、提高飞机后，巡航各分量上界应比海浪高4至10分贝');
 assert.ok(db(planeRmsBound(strained) / planeUpperRms) > 8, '负重轰鸣需明显加强');
 const reports = [];
 for (const [width,height,aspect] of [[1920,1080,''],[600,800,'3:4']]) {
   const box = vm.createContext({width,height,SceneSound,document:{body:{dataset:{aspect}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../sketch.js'),'utf8'),box);
   vm.runInContext(`motionPreference={matches:false};horizonY=Math.round(height*.76);sunX=width*.5;
-    sunR=Math.min(width*.038,height*.045);sunY=horizonY-sunR*.76;pickupTime=findPickupTime();
+    sunR=Math.min(width*.0456,height*.054);sunY=horizonY-sunR*.76;pickupTime=findPickupTime();
     waterContacts=findWaterContacts();waterDrops=makeWaterDrops();sunExitTime=findSunExitTime();skyStars=makeSkyStars();`,box);
   const events=vm.runInContext('makeSoundEvents()',box);
   const mix = new Float32Array(sea.length);

@@ -11,8 +11,8 @@ function scene(width, height, aspect = '') {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../sketch.js'), 'utf8'), box);
   vm.runInContext(`
     motionPreference = {matches: false};
-    horizonY = Math.round(height * .76);sunX = width * .5;
-    sunR = Math.min(width * .038, height * .045);sunY = horizonY - sunR * .76;
+    horizonY = Math.round(height*.76);sunX = width * .5;
+    sunR = Math.min(width*.0456,height*.054);sunY = horizonY - sunR * .76;
     pickupTime = findPickupTime();waterContacts = findWaterContacts();waterDrops = makeWaterDrops();sunExitTime = findSunExitTime();
     skyStars = makeSkyStars();soundEvents = makeSoundEvents();
   `, box);
