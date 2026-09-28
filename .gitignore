@@ -8,3 +8,6 @@ output/*
 output/warm-4k-28s/*
 !output/warm-4k-28s/export.cjs
 !output/warm-4k-28s/README.md
+
+# 交付成片不入库
+/交付文件/
