@@ -11,3 +11,6 @@ output/warm-4k-28s/*
 
 # 交付成片不入库
 /交付文件/
+
+# 本地 agent 工具不入库
+.codex/
